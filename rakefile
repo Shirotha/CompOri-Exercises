@@ -1,0 +1,66 @@
+GCC = "gcc"
+CFLAGS = %W{
+	-fopenmp
+}
+CINCLUDE = %W{
+	common
+}
+CTEMPLATE = "tmpl.c"
+##################################################
+require "rake/loaders/makefile"
+require "rake/clean"
+
+DIR = ENV["dir"]
+throw "envioment variable 'dir' must be set before running" unless DIR
+
+OUT = File.join DIR, DIR.split(?/)[-1]
+
+CLEAN.include File.join(DIR, "*.o"), File.join(DIR, "*.mf")
+CINCLUDE.each do |i|
+	CLEAN.include File.join(i, "*.o"), File.join(i, "*.mf")
+end
+CLOBBER.include OUT
+
+SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), CINCLUDE.map { |i| File.join(i, "*.c")}]
+OBJECT_FILES = SOURCE_FILES.ext ".o"
+DEPEND_FILES = SOURCE_FILES.ext ".mf"
+
+task :default => [:build, :clean, :run]
+
+desc "Create a new program with main file [file]"
+task :create, [:file] do |t, args|
+	args.with_defaults(file: DIR)
+	mkdir DIR unless Dir.exists? DIR
+	f = File.join(DIR, args.file + ".c")
+	cp CTEMPLATE, f
+end
+
+desc "Run the program"
+task :run => :build do |t|
+	sh OUT
+end
+
+desc "Compile the program"
+task :build => OBJECT_FILES do |t|
+	flags = CFLAGS.join(?\s) + CINCLUDE.map { |i| " -I#{i}"}.join
+	# TODO: fix options order in flags
+	sh "#{GCC} #{flags} #{OBJECT_FILES} -o #{OUT} -lm"
+end
+
+rule ".o" => ".c" do |t|
+	flags = CFLAGS.join(?\s) + CINCLUDE.map { |i| " -I#{i}"}.join
+	sh "#{GCC} #{flags} -c #{t.source} -o #{t.name}"
+end
+
+rule ".mf" => ".c" do |t|
+	cmd = "#{GCC} -MM #{t.source}"
+	puts cmd
+	mf = `#{cmd}`
+	open t.name, "w" do |f|
+		f.puts mf
+		f.puts mf.sub(".o:", ".mf:")
+	end
+end
+
+DEPEND_FILES.each { |dep| import dep }
+DEPEND_FILES.each { |dep| file dep }
