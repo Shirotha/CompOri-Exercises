@@ -4,74 +4,163 @@
 #include <omp.h>
 #include <bm.h>
 
+#define SQ(X) ((X) * (X))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
-#define SIZE 100
+#define SIZE 1000
 #define AMP 0.3989422804014327 
-#define THRESHOLD 0.01
-#define DEFAULT_STEP 0.01
+#define THRESHOLD 1e-10
+#define DEFAULT_STEP 0.1
 
-#define CONV_SIZE 100
+#define CONV_SIZE 20
 // TODO: dynamic step size?
 
-#define RSTD1 1.0
-#define RSTD2 1.0
+#define MAX_TASKS 20
+#define STRIDE SIZE / MAX_TASKS
 
-double gauss_conv(double x, double y, double max_r)
+#define RSTD1 2.5066282746310002 
+#define RSTD2 2.5066282746310002 
+
+double gauss_conv(const double x, const double y, const double max_r)
 {
-    int i, j;
-    double x1, x2, y1, y2;
-    double sum, step = max_r * 2 / SIZE;
-    for (i = 0; i < SIZE; ++i)
-        for (j = 0; j < SIZE; ++j)
-        {
-            x1 = step * j - max_r;
-            y1 = step * i - max_r;
-            x2 = x1 - x;
-            y2 = y1 - y;
-            sum += exp(-(x1 * x1 + y1 * y1) * 0.5 * RSTD1 * RSTD1 - 0.5 * RSTD2 * RSTD2 * (x2 * x2 + y2 * y2));
-        }
+    double tx, ty;
+    const double step = max_r * 2.0 / CONV_SIZE;
+    double sum = 0;
+    for (tx = 0.5 * step - max_r; tx < max_r; tx += step)
+        for (ty = 0.5 * step - max_r; ty < max_r; ty += step)
+            sum += exp(-0.5 * SQ(RSTD1) * (SQ(tx) + SQ(ty)) - 0.5 * SQ(RSTD2) * (SQ(tx - x) + SQ(ty - y)));
     
-    return sum * step * step * AMP * AMP * RSTD1 * RSTD2;
+    return sum * SQ(step) * SQ(AMP) * RSTD1 * RSTD2;
 }
 
 int main(int argc, char* argv[])
 {
-    double max_r = 0, y = 1, rstd = MIN(RSTD1, RSTD2);
+    double tmp = 0, rstd = MIN(RSTD1, RSTD2);
 
-    while (AMP * rstd * exp(-max_r * max_r * rstd * rstd) > THRESHOLD)
-        max_r += DEFAULT_STEP;
+    while (AMP * rstd * exp(-SQ(tmp) * SQ(rstd)) > THRESHOLD)
+        tmp += DEFAULT_STEP;
+    
+    const double max_r = tmp;
+    const double step = max_r * 2.0 / SIZE;
 
-    double step_size = max_r * 2 / SIZE;
+    printf("Integral to %.16f in %d %.16f steps\n", max_r, SIZE, step);
 
-    printf("Integral to %.16f in %.16f steps\n", max_r, step_size);
-
-    double conv[SIZE * SIZE];
-
+    double conv[SQ(SIZE)];
     struct BM_Data bm;
+
+#pragma region Convolution - single thread
+    printf("Convolution (seriel)\n");
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     int i, j;
-    #pragma parallel for private(i,j)
+    double y;
+    for (i = 0; i < SIZE; ++i)
+    {
+        y = (i + 0.5) * step - max_r;
+        for (j = 0; j < SIZE; ++j)
+            conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
+    }
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+#pragma region Convolution - multi thread
+    printf("Convolution (parallel)\n");
+    bm.state = READY;
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    #pragma omp parallel for private(i,j,y)
+    for (i = 0; i < SIZE; ++i)
+    {
+        y = (i + 0.5) * step - max_r;
+        for (j = 0; j < SIZE; ++j)
+            conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
+    }
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+#pragma region Convolution - tasks
+    /* FIXME: breaks for large SIZE
+    printf("Convolution (tasks)\n");
+    bm.state = READY;
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+        
+    for (i = 0; i < SIZE; ++i)
+    {
+        y = (i + 0.5) * step - max_r;
+        #if (SIZE > MAX_TASKS)
+            for (int k = 0; k < MAX_TASKS; ++k)
+                #pragma omp task
+                    for (j = k; j < SIZE; j += STRIDE)
+                        conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
+        #elif
+            #pragma omp task
+                for (j = 0; j < SIZE; ++j)
+                    conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
+        #endif
+    }
+    #pragma omp taskwait
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    */
+#pragma endregion
+
+#pragma region Integral - ordered
+    bm.state = READY;
+    printf("Integral\n");
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    double sum = 0;
     for (i = 0; i < SIZE; ++i)
         for (j = 0; j < SIZE; ++j)
-            conv[i * SIZE + j] = gauss_conv(j * step_size - max_r, i * step_size - max_r, max_r);
+            sum += conv[i * SIZE + j];
 
-    // TODO: restart timer here
-
-    double sum;
-    for (i = 0; i < SIZE; ++i)
-        for (j = 0; j < SIZE; ++j)
-            sum += step_size * step_size * conv[i * SIZE + j];
+    sum *= step * step;
 
     if (bm_end(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
     
-    printf("result = %f\n", sum);
-
     if (bm_print(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
+#pragma endregion
 
+#pragma region Integral - unordered
+    bm.state = READY;
+    printf("Integral (cache miss)\n");
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    sum = 0;
+    for (j = 0; j < SIZE; ++j)
+        for (i = 0; i < SIZE; ++i)
+            sum += conv[i * SIZE + j];
+
+    sum *= step * step;
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+    printf("result = %f\n", sum);
     return EXIT_SUCCESS;
 }
