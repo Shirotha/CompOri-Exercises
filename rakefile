@@ -1,6 +1,12 @@
 GCC = "gcc"
 CFLAGS = %W{
 	-fopenmp
+	-Wall
+	-Wno-unknown-pragmas
+	-O3
+}
+LFLAGS = %W{
+	-lm
 }
 CINCLUDE = %W{
 	common
@@ -42,14 +48,11 @@ end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
-	flags = CFLAGS.join(?\s) + CINCLUDE.map { |i| " -I#{i}"}.join
-	# TODO: fix options order in flags
-	sh "#{GCC} #{flags} #{OBJECT_FILES} -o #{OUT} -lm"
+	sh "#{GCC} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
 end
 
 rule ".o" => ".c" do |t|
-	flags = CFLAGS.join(?\s) + CINCLUDE.map { |i| " -I#{i}"}.join
-	sh "#{GCC} #{flags} -c #{t.source} -o #{t.name}"
+	sh "#{GCC} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
 
 rule ".mf" => ".c" do |t|

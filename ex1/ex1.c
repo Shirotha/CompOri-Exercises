@@ -13,10 +13,10 @@
 #define DEFAULT_STEP 0.1
 
 #define CONV_SIZE 20
-// TODO: dynamic step size?
+// TODO: dynamic step size? use symmetry?
 
-#define MAX_TASKS 20
-#define STRIDE SIZE / MAX_TASKS
+#define MAX_TASKS 25
+#define STRIDE (SIZE / MAX_TASKS)
 
 #define RSTD1 2.5066282746310002 
 #define RSTD2 2.5066282746310002 
@@ -48,13 +48,14 @@ int main(int argc, char* argv[])
     double conv[SQ(SIZE)];
     struct BM_Data bm;
 
+    int i = 0, j = 0;
+    double y = 0.0;
+
 #pragma region Convolution - single thread
     printf("Convolution (seriel)\n");
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
-    int i, j;
-    double y;
     for (i = 0; i < SIZE; ++i)
     {
         y = (i + 0.5) * step - max_r;
@@ -69,13 +70,14 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
 #pragma endregion
 
+// TODO: compare different scheduling methods
 #pragma region Convolution - multi thread
     printf("Convolution (parallel)\n");
     bm.state = READY;
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
-    #pragma omp parallel for private(i,j,y)
+    #pragma omp parallel for default(none) shared(conv, step, max_r) private(i, j, y)
     for (i = 0; i < SIZE; ++i)
     {
         y = (i + 0.5) * step - max_r;
@@ -91,26 +93,19 @@ int main(int argc, char* argv[])
 #pragma endregion
 
 #pragma region Convolution - tasks
-    /* FIXME: breaks for large SIZE
-    printf("Convolution (tasks)\n");
+    printf("Convolution (%d tasks)\n", MAX_TASKS);
     bm.state = READY;
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
-        
-    for (i = 0; i < SIZE; ++i)
-    {
-        y = (i + 0.5) * step - max_r;
-        #if (SIZE > MAX_TASKS)
-            for (int k = 0; k < MAX_TASKS; ++k)
-                #pragma omp task
-                    for (j = k; j < SIZE; j += STRIDE)
-                        conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
-        #elif
-            #pragma omp task
+
+    for (int k = 0; k < MAX_TASKS; ++k)
+        #pragma omp task default(none) shared(conv, step, max_r) private(k, i, j, y)
+            for (i = k; i < SIZE; i += STRIDE)
+            {
+                y = (i + 0.5) * step - max_r;
                 for (j = 0; j < SIZE; ++j)
                     conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
-        #endif
-    }
+            }
     #pragma omp taskwait
 
     if (bm_end(&bm) != EXIT_SUCCESS)
@@ -118,8 +113,9 @@ int main(int argc, char* argv[])
 
     if (bm_print(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
-    */
 #pragma endregion
+
+// TODO: plot convolution results
 
 #pragma region Integral - ordered
     bm.state = READY;
