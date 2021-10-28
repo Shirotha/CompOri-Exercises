@@ -18,6 +18,8 @@
 #define MAX_TASKS 25
 #define STRIDE (SIZE / MAX_TASKS)
 
+#define BATCH_SIZE 1000
+
 #define RSTD1 2.5066282746310002 
 #define RSTD2 2.5066282746310002 
 
@@ -32,6 +34,7 @@ double gauss_conv(const double x, const double y, const double max_r)
     
     return sum * SQ(step) * SQ(AMP) * RSTD1 * RSTD2;
 }
+
 
 int main(int argc, char* argv[])
 {
@@ -70,14 +73,34 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
 #pragma endregion
 
-// TODO: compare different scheduling methods
-#pragma region Convolution - multi thread
-    printf("Convolution (parallel)\n");
+#pragma region Convolution - multi thread (static)
+    printf("Convolution (parallel - static)\n");
     bm.state = READY;
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
-    #pragma omp parallel for default(none) shared(conv, step, max_r) private(i, j, y)
+    #pragma omp parallel for schedule(static) default(none) shared(conv, step, max_r) private(i, j, y)
+    for (i = 0; i < SIZE; ++i)
+    {
+        y = (i + 0.5) * step - max_r;
+        for (j = 0; j < SIZE; ++j)
+            conv[i * SIZE + j] = gauss_conv((j + 0.5) * step - max_r, y, max_r);
+    }
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+#pragma region Convolution - multi thread (dynamic)
+    printf("Convolution (parallel - dynamic)\n");
+    bm.state = READY;
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    #pragma omp parallel for schedule(dynamic) default(none) shared(conv, step, max_r) private(i, j, y)
     for (i = 0; i < SIZE; ++i)
     {
         y = (i + 0.5) * step - max_r;
@@ -117,18 +140,75 @@ int main(int argc, char* argv[])
 
 // TODO: plot convolution results
 
+    printf("Batch size for time measure = %d\n", BATCH_SIZE);
+
+    double sum = 0;
+    int k;
 #pragma region Integral - ordered
     bm.state = READY;
-    printf("Integral\n");
+    printf("Integral (forwards)\n");
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
-    double sum = 0;
-    for (i = 0; i < SIZE; ++i)
-        for (j = 0; j < SIZE; ++j)
-            sum += conv[i * SIZE + j];
+    for (k = 0; k < BATCH_SIZE; ++k)
+    {
+        sum = 0;
+        for (i = 0; i < SIZE; ++i)
+            for (j = 0; j < SIZE; ++j)
+                sum += conv[i * SIZE + j];
 
-    sum *= step * step;
+        sum *= step * step;
+    }
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+#pragma region Integral - ordered (backwards)
+    bm.state = READY;
+    printf("Integral (backwards)\n");
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    for (k = 0; k < BATCH_SIZE; ++k)
+    {
+        sum = 0;
+        for (i = SIZE - 1; i >= 0; --i)
+            for (j = SIZE - 1; j >= 0; --j)
+                sum += conv[i * SIZE + j];
+
+        sum *= step * step;
+    }
+
+    if (bm_end(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    
+    if (bm_print(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#pragma endregion
+
+#pragma region Integral - parallel
+    bm.state = READY;
+    printf("Integral (parallel)\n");
+    if (bm_start(&bm) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+
+    double pSum;
+    for (k = 0; k < BATCH_SIZE; ++k)
+    {
+        pSum = 0;
+        #pragma omp parallel for default(none) shared(conv, sum)  private(i, j) reduction(+: pSum)
+        for (i = 0; i < SIZE; ++i)
+            for (j = 0; j < SIZE; ++j)
+                pSum += conv[i * SIZE + j];
+
+        pSum *= step * step;
+        sum = pSum;
+    }
 
     if (bm_end(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
@@ -139,16 +219,19 @@ int main(int argc, char* argv[])
 
 #pragma region Integral - unordered
     bm.state = READY;
-    printf("Integral (cache miss)\n");
+    printf("Integral (force cache miss)\n");
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
-    sum = 0;
-    for (j = 0; j < SIZE; ++j)
-        for (i = 0; i < SIZE; ++i)
-            sum += conv[i * SIZE + j];
+    for (k = 0; k < BATCH_SIZE; ++k)
+    {
+        sum = 0;
+        for (j = 0; j < SIZE; ++j)
+            for (i = 0; i < SIZE; ++i)
+                sum += conv[i * SIZE + j];
 
-    sum *= step * step;
+        sum *= step * step;
+    }
 
     if (bm_end(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
