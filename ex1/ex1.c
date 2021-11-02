@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <omp.h>
-#include <bm.h>
+#include "../common/bm.h"
 
 #define SQ(X) ((X) * (X))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))

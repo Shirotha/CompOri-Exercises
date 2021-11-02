@@ -1,15 +1,56 @@
-GCC = "gcc"
+PETSC_DIR = "../compori2122-master/petscbuild/petsc-3.15.4"
+SLEPC_DIR = "../compori2122-master/petscbuild/slepc-3.15.1"
+PETSC_ARCH = "opt"
+
+CXX = "#{PETSC_DIR}/#{PETSC_ARCH}/bin/mpicxx"#"gcc"
 CFLAGS = %W{
 	-fopenmp
+	-fstack-protector
+
+	-march=nehalem
+	-mtune=generic
+
 	-Wall
 	-Wno-unknown-pragmas
+
 	-O3
 }
 LFLAGS = %W{
+	-lstdc++
+	-ldl
+	-lgfortran
+	-lpthread
+	-lrt
+
 	-lm
+	-lblas
+	-llapack
+	-lfftw3
+	
+	-lmpi
+	-lmpifort
+	-lfftw3_mpi
+
+	-lpetsc
+	-lslepc
+}
+CCOMMON = %W{
+	common
 }
 CINCLUDE = %W{
-	common
+	/usr/include
+	/usr/include/mkl
+
+	#{PETSC_DIR}/include
+	#{PETSC_DIR}/#{PETSC_ARCH}/include
+	#{SLEPC_DIR}/include
+	#{SLEPC_DIR}/#{PETSC_ARCH}/include
+}
+CLIB = %W{
+	/usr/lib/gcc/x86_64-linux-gnu/10
+
+	#{PETSC_DIR}/#{PETSC_ARCH}/lib
+	#{SLEPC_DIR}/#{PETSC_ARCH}/lib
 }
 CTEMPLATE = "tmpl.c"
 ##################################################
@@ -22,12 +63,12 @@ throw "envioment variable 'dir' must be set before running" unless DIR
 OUT = File.join DIR, DIR.split(?/)[-1]
 
 CLEAN.include File.join(DIR, "*.o"), File.join(DIR, "*.mf")
-CINCLUDE.each do |i|
+CCOMMON.each do |i|
 	CLEAN.include File.join(i, "*.o"), File.join(i, "*.mf")
 end
 CLOBBER.include OUT
 
-SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), CINCLUDE.map { |i| File.join(i, "*.c")}]
+SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), CCOMMON.map { |i| File.join(i, "*.c")}]
 OBJECT_FILES = SOURCE_FILES.ext ".o"
 DEPEND_FILES = SOURCE_FILES.ext ".mf"
 
@@ -48,15 +89,15 @@ end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
-	sh "#{GCC} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
+	sh "#{CXX} #{CFLAGS.join(?\s)} #{CLIB.map { |i| " -L#{i}"}.join} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
 end
 
 rule ".o" => ".c" do |t|
-	sh "#{GCC} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
+	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
 
 rule ".mf" => ".c" do |t|
-	cmd = "#{GCC} -MM #{t.source}"
+	cmd = "#{CXX} -MM #{t.source}"
 	puts cmd
 	mf = `#{cmd}`
 	open t.name, "w" do |f|
