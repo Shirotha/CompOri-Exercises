@@ -12,27 +12,47 @@ CFLAGS = %W{
 
 	-Wall
 	-Wno-unknown-pragmas
+	-Wwrite-strings
+	-Wno-strict-aliasing
 
 	-O3
 }
 LFLAGS = %W{
+	-Wl,-rpath,#{SLEPC_DIR}/#{PETSC_ARCH}/lib
+	-L#{SLEPC_DIR}/#{PETSC_ARCH}/lib
+	-lslepc
+	-L#{PETSC_DIR}/#{PETSC_ARCH}/lib
+
+	-Wl,-rpath,#{PETSC_DIR}/#{PETSC_ARCH}/lib
+	-L#{PETSC_DIR}/#{PETSC_ARCH}/lib
+	-L/usr/lib/gcc/x86_64-linux-gnu/10
+	-lpetsc
+	
+	-lfftw3_mpi
+	-lfftw3
+
+	-llapack
+	-lblas
+	
+	-lm
 	-lstdc++
 	-ldl
+	-lmpifort
+	-lmpi
 	-lgfortran
+	-lm
 	-lpthread
 	-lrt
-
+	-lgfortran
 	-lm
-	-lblas
-	-llapack
-	-lfftw3
-	
-	-lmpi
-	-lmpifort
-	-lfftw3_mpi
+	-lgfortran
 
-	-lpetsc
-	-lslepc
+	-lgcc_s
+	-lquadmath
+	-lstdc++
+	-ldl
+	
+
 }
 CCOMMON = %W{
 	common
@@ -45,12 +65,6 @@ CINCLUDE = %W{
 	#{PETSC_DIR}/#{PETSC_ARCH}/include
 	#{SLEPC_DIR}/include
 	#{SLEPC_DIR}/#{PETSC_ARCH}/include
-}
-CLIB = %W{
-	/usr/lib/gcc/x86_64-linux-gnu/10
-
-	#{PETSC_DIR}/#{PETSC_ARCH}/lib
-	#{SLEPC_DIR}/#{PETSC_ARCH}/lib
 }
 CTEMPLATE = "tmpl.c"
 ##################################################
@@ -89,7 +103,7 @@ end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
-	sh "#{CXX} #{CFLAGS.join(?\s)} #{CLIB.map { |i| " -L#{i}"}.join} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
+	sh "#{CXX} #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
 end
 
 rule ".o" => ".c" do |t|
