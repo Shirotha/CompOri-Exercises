@@ -15,8 +15,8 @@
 #define CONV_SIZE 20
 // TODO: dynamic step size? use symmetry?
 
-#define MAX_TASKS 25
-#define STRIDE (SIZE / MAX_TASKS)
+#define MAX_TASKS 1000
+#define STRIDE MAX_TASKS
 
 #define BATCH_SIZE 1000
 
@@ -35,6 +35,49 @@ double gauss_conv(const double x, const double y, const double max_r)
     return sum * SQ(step) * SQ(AMP) * RSTD1 * RSTD2;
 }
 
+void init_array(int* a, int len)
+{
+    for (int i = 0; i < len; ++i)
+    a[i] = rand() % 1000;
+}
+
+void quicksort(int *a, int len, int param) {
+    if (len < 2) return;
+    
+    int pivot = a[len / 2];
+    
+    int i, j;
+    for (i = 0, j = len - 1; ; i++, j--) {
+        while (a[i] < pivot) i++;
+        while (a[j] > pivot) j--;
+    
+        if (i >= j) break;
+    
+        int temp = a[i];
+        a[i]     = a[j];
+        a[j]     = temp;
+    }
+
+    #pragma omp task if(param > 0)
+    quicksort(a, i, param - 1);
+    #pragma omp task if(param > 0)
+    quicksort(a + i, len - i, param - 1);
+    //#pragma omp taskwait
+}
+
+static int param = 0;
+
+int quicksort_test(int i)
+{
+    int array[SIZE];
+    init_array(array, SIZE);
+    #pragma omp parallel
+    #pragma omp single
+    quicksort(array, SIZE, param);
+    #pragma omp taskwait
+
+    return EXIT_SUCCESS;
+}
 
 int main(int argc, char* argv[])
 {
@@ -53,6 +96,28 @@ int main(int argc, char* argv[])
 
     int i = 0, j = 0;
     double y = 0.0;
+
+#pragma region quicksort
+    /*
+    printf("quicksort\n");
+
+    struct BM_Data bms[SIZE];
+
+    for (int p = 0; p < 16; ++p)
+    {
+        for (i = 0; i < SIZE; ++i)
+            bms[i].state = READY;
+
+        param = p;
+        bm_batch(bms, SIZE, quicksort_test);
+        
+        if (bm_print_batch(bms, SIZE) != EXIT_SUCCESS)
+            return EXIT_FAILURE;
+    }
+    
+    return EXIT_SUCCESS;
+    */
+#pragma endregion
 
 #pragma region Convolution - single thread
     printf("Convolution (seriel)\n");
@@ -121,6 +186,8 @@ int main(int argc, char* argv[])
     if (bm_start(&bm) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
+    #pragma omp parallel
+    #pragma omp single
     for (int k = 0; k < MAX_TASKS; ++k)
         #pragma omp task default(none) shared(conv, step, max_r) private(k, i, j, y)
             for (i = k; i < SIZE; i += STRIDE)
@@ -241,5 +308,6 @@ int main(int argc, char* argv[])
 #pragma endregion
 
     printf("result = %f\n", sum);
+
     return EXIT_SUCCESS;
 }

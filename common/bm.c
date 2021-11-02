@@ -87,10 +87,10 @@ int bm_print_batch(struct BM_Data* data, int size)
             printf("can't print non finished bm");
             return EXIT_FAILURE;
         }
-
+        /*
         printf("%d ", i);
         bm_print(data);
-
+        */
         sum += data->end - data->start;
 
         if (i < size - 1)
