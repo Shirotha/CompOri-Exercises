@@ -53,5 +53,8 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+.vscode/
+
 test/test
 ex1/ex1
+ex2/ex2
