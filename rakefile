@@ -2,8 +2,11 @@ PETSC_DIR = "../compori2122-master/petscbuild/petsc-3.15.4"
 SLEPC_DIR = "../compori2122-master/petscbuild/slepc-3.15.1"
 PETSC_ARCH = "opt"
 
-CXX = "#{PETSC_DIR}/#{PETSC_ARCH}/bin/mpicxx"#"gcc"
+CXX = "#{PETSC_DIR}/#{PETSC_ARCH}/bin/mpicxx"
+MPIEXEC = "mpiexec"
 CFLAGS = %W{
+	-std=c++20
+
 	-fopenmp
 	-fstack-protector
 
@@ -82,7 +85,7 @@ CCOMMON.each do |i|
 end
 CLOBBER.include OUT
 
-SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), CCOMMON.map { |i| File.join(i, "*.c")}]
+SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), File.join(DIR, "*.cpp"), CCOMMON.map { |i| File.join(i, "*.c")}, CCOMMON.map { |i| File.join(i, "*.cpp")}]
 OBJECT_FILES = SOURCE_FILES.ext ".o"
 DEPEND_FILES = SOURCE_FILES.ext ".mf"
 
@@ -98,6 +101,7 @@ end
 
 desc "Run the program"
 task :run => :build do |t|
+	# sh "#{MPIEXEC} -n 2 #{OUT}"
 	sh OUT
 end
 
@@ -110,7 +114,21 @@ rule ".o" => ".c" do |t|
 	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
 
+rule ".o" => ".cpp" do |t|
+	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
+end
+
 rule ".mf" => ".c" do |t|
+	cmd = "#{CXX} -MM #{t.source}"
+	puts cmd
+	mf = `#{cmd}`
+	open t.name, "w" do |f|
+		f.puts mf
+		f.puts mf.sub(".o:", ".mf:")
+	end
+end
+
+rule ".mf" => ".cpp" do |t|
 	cmd = "#{CXX} -MM #{t.source}"
 	puts cmd
 	mf = `#{cmd}`
