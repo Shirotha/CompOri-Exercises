@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <tuple>
+#include <functional>
 
 #include <petsc.h>
 #include <slepceps.h>
@@ -13,6 +14,8 @@ static PetscErrorCode ierr;
 
 namespace la
 {
+    struct Vector;
+
     constexpr std::array<PetscScalar, 3> CFD_D1_A2 { -1.0 / 2.0, 0.0, -1.0 / 2.0 };
     constexpr std::array<PetscScalar, 3> CFD_D2_A2 { 1.0, -2.0, 1.0 };
 
@@ -91,13 +94,14 @@ namespace la
             constexpr PetscInt n = (D + 3) / 2 + A / 2;
             constexpr PetscInt mi = n / 2;
             
-            auto values = la::cfd<D, A>();
+            constexpr auto coeff = la::cfd<D, A>();
+            std::array<PetscScalar, n> values;
 
             MatStencil row[1], col[n];
             PetscInt i, di, c;
             
             for (i = 0; i < n; ++i)
-                values[i] *= scale * pow(grid->step, D);
+                values[i] = coeff[i] * scale / pow(grid->step, D);
             
             for (i = grid->begin; i < grid->end; ++i)
             {
@@ -115,6 +119,10 @@ namespace la
                 }
             }
         }
+        
+        void apply_diagonal(const InsertMode insert, const std::shared_ptr<Vector> diag);
+
+        void apply_diagonal(const InsertMode insert, const std::function<PetscScalar(PetscReal)>&& func);
 
         void assemble(const MatAssemblyType type)
         {
@@ -133,6 +141,12 @@ namespace la
             E(DMCreateGlobalVector(grid->dm, &vec));
         }
 
+        void assemble()
+        {
+            E(VecAssemblyBegin(vec));
+            E(VecAssemblyEnd(vec));
+        }
+
         ~Vector()
         {
             ierr = VecDestroy(&vec);
@@ -144,11 +158,12 @@ namespace la
         ::EPS eps;
         std::shared_ptr<Matrix> matrix;
 
-        EigenSolver(std::shared_ptr<Matrix> mat, EPSProblemType type) : matrix(mat)
+        EigenSolver(std::shared_ptr<Matrix> mat, const EPSProblemType type) : matrix(mat)
         {
             E(EPSCreate(PETSC_COMM_WORLD, &eps));
             E(EPSSetOperators(eps, matrix->mat, NULL));
             E(EPSSetProblemType(eps, type));
+            E(EPSSetWhichEigenpairs(eps, EPS_SMALLEST_REAL));
             E(EPSSetFromOptions(eps));
         }
 
@@ -201,8 +216,27 @@ namespace la
         void getEigenpair(const int i, PetscScalar& value, Vector& vector, PetscReal& error) const
         {
             E(EPSGetEigenpair(eps, i, &value, NULL, vector.vec, NULL));
-            E(EPSComputeError(eps, i, EPS_ERROR_RELATIVE, &error));
+            E(EPSComputeError(eps, i, EPS_ERROR_ABSOLUTE, &error));
         }
     };
+
+    void la::Matrix::apply_diagonal(const InsertMode insert, const std::shared_ptr<la::Vector> diag)
+    {
+        E(MatDiagonalSet(mat, diag->vec, insert));
+    }
+
+    void Matrix::apply_diagonal(const InsertMode insert, const std::function<PetscScalar(PetscReal)>&& func)
+    {
+        Vector vec(grid);
+        PetscReal x = grid->min;
+        for (int i = 0; i < grid->size; ++i)
+        {
+            E(VecSetValue(vec.vec, i, func(x), INSERT_VALUES));
+            x += grid->step;
+        }
+        vec.assemble();
+
+        E(MatDiagonalSet(mat, vec.vec, insert));
+    }
 
 }
