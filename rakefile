@@ -63,6 +63,7 @@ CCOMMON = %W{
 CINCLUDE = %W{
 	/usr/include
 	/usr/include/mkl
+	/usr/local/include
 
 	#{PETSC_DIR}/include
 	#{PETSC_DIR}/#{PETSC_ARCH}/include
