@@ -7,82 +7,89 @@ namespace plt = sciplot;
 #include "../common/bm.hpp"
 #include "../common/la.hpp"
 
+/*
+ * Analytical solutions in N dimensions
+ * E_n = omega * (n + N/2)
+ */
 struct Harmonic : la::PotentialFamily<la::Potential1d, PetscReal>
+{
+    la::Potential1d get(PetscReal omega)
     {
-        la::Potential1d get(PetscReal omega)
-        {
-            const double c = 0.5 * omega * omega;
-            return [c](PetscReal x) 
-            { 
-                return c * x * x; 
-            };
-        }
-        la::Interval range(PetscReal omega)
-        {
-            constexpr PetscReal threshold = 4.0;
-            PetscReal x = threshold / sqrt(omega);
-            return { -x, x };
-        }
-    } harmonic;
+        const double c = 0.5 * omega * omega;
+        return [c](PetscReal x) 
+        { 
+            return c * x * x; 
+        };
+    }
+    la::Interval range(PetscReal omega)
+    {
+        constexpr PetscReal threshold = 4.0;
+        PetscReal x = threshold / sqrt(omega);
+        return { -x, x };
+    }
+} harmonic;
+/*
+ * Analytical solutions
+ * E_n = -amp^2/2 1/n^2
+ */
+struct Coulomb : la::PotentialFamily<la::Potential1d, PetscReal>
+{
+    la::Potential1d get(PetscReal amp)
+    {
+        auto r = range(amp);
+        PetscReal min = -200.0 / (r.second.x - r.first.x);
+        return [amp, min](PetscReal x) 
+        { 
+            PetscReal y = -amp / abs(x);
+            if (y < min)
+                return min;
+            return y;
+        };
+    }
+    la::Interval range(PetscReal amp)
+    {
+        constexpr PetscReal threshold = 1e-1;
+        PetscReal x = sqrt(1/threshold * amp);
+        return { -x, x };
+    }
+} coulomb;
 
-    struct Coulomb : la::PotentialFamily<la::Potential1d, PetscReal>
+struct Morse : la::PotentialFamily<la::Potential1d, PetscReal, PetscReal>
+{
+    la::Potential1d get(PetscReal r0, PetscReal depth)
     {
-        la::Potential1d get(PetscReal amp)
+        PetscReal a = 1.0 / sqrt(2 * depth);
+        return [r0, depth, a](PetscReal x)
         {
-            auto r = range(amp);
-            PetscReal min = -200.0 / (r.second.x - r.first.x);
-            return [amp, min](PetscReal x) 
-            { 
-                PetscReal y = -amp / abs(x);
-                if (y < min)
-                    return min;
-                return y;
-            };
-        }
-        la::Interval range(PetscReal amp)
-        {
-            constexpr PetscReal threshold = 1e-1;
-            PetscReal x = sqrt(1/threshold * amp);
-            return { -x, x };
-        }
-    } coulomb;
+            PetscReal e = 1 - exp(-a * (x - r0));
+            return depth * e * e;
+        };
+    }
+    la::Interval range(PetscReal r0, PetscReal depth)
+    {
+        constexpr PetscReal threshold = 0.99;
+        return { 0.0, sqrt(2 * depth) * log(1.0 / (1 - sqrt(threshold))) };
+    }
+} morse;
 
-    struct Morse : la::PotentialFamily<la::Potential1d, PetscReal, PetscReal>
+struct DoubleWell : la::PotentialFamily<la::Potential1d, PetscReal, PetscReal>
+{
+    la::Potential1d get(PetscReal h, PetscReal c)
     {
-        la::Potential1d get(PetscReal r0, PetscReal depth)
+        PetscReal h4_4 = 0.25 * h * h * h * h, c2_2 = 0.5 * c * c;
+        return [h4_4, c2_2](PetscReal x)
         {
-            PetscReal a = 1.0 / sqrt(2 * depth);
-            return [r0, depth, a](PetscReal x)
-            {
-                PetscReal e = 1 - exp(-a * (x - r0));
-                return depth * e * e;
-            };
-        }
-        la::Interval range(PetscReal r0, PetscReal depth)
-        {
-            constexpr PetscReal threshold = 0.99;
-            return { 0.0, sqrt(2 * depth) * log(1.0 / (1 - sqrt(threshold))) };
-        }
-    } morse;
-
-    struct DoubleWell : la::PotentialFamily<la::Potential1d, PetscReal, PetscReal>
+            PetscReal x2 = x * x;
+            return c2_2 * x2 * x2 - h4_4 * x2;
+        };
+    }
+    la::Interval range(PetscReal h, PetscReal c)
     {
-        la::Potential1d get(PetscReal h, PetscReal c)
-        {
-            PetscReal h4_4 = 0.25 * h * h * h * h, c2_2 = 0.5 * c * c;
-            return [h4_4, c2_2](PetscReal x)
-            {
-                PetscReal x2 = x * x;
-                return c2_2 * x2 * x2 - h4_4 * x2;
-            };
-        }
-        la::Interval range(PetscReal h, PetscReal c)
-        {
-            constexpr PetscReal threshold = 0.6;
-            PetscReal x = threshold * sqrt(1 + sqrt(3)) * h * h / c;
-            return { -x, x };
-        }
-    } doubleWell;
+        constexpr PetscReal threshold = 0.6;
+        PetscReal x = threshold * sqrt(1 + sqrt(3)) * h * h / c;
+        return { -x, x };
+    }
+} doubleWell;
 
 std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm::BM& bm, const PetscInt n, const PetscInt dimension, const la::SpecializedPotential<la::Potential1d>& potential)
 {
@@ -239,8 +246,7 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
             pot[i] -= pmin;
 
         if (logScale)
-            for (i = 0; i < pot.size(); ++i)
-                pot[i] = log10(pot[i]);
+            plot.ytics().logscale();
 
         plot.drawCurveFilled(xs, pot).labelNone().above().fillIntensity(0.3);
 
@@ -268,8 +274,6 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
             for (j = 0; j < ys.size(); ++j)
             {
                 tmp = ys[j] * max + ev.real() - pmin;
-                if (logScale)
-                    tmp = log10(tmp);
                 if (tmp > ymax)
                     ymax = tmp;
                 if (tmp < ymin)
@@ -297,7 +301,6 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
 {
     size_t i, j, n = solver->getNumEigenpairs();
     size_t rows = sqrt(n);
-
     if (n > 0)
     {
         std::vector<std::vector<plt::PlotVariant>> plots(rows);
@@ -314,7 +317,7 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
                 xs[j * mx + i] = points[j][2 * i].real();
                 ys[j * mx + i] = points[j][2 * i + 1].real();
             }
-
+            
         PetscReal zmin = std::numeric_limits<double>::max(), zmax = 0, max, pmin = std::numeric_limits<double>::max(), tmp;
         plt::Vec pot(xs.size());
         for (i = 0; i < xs.size(); ++i)
@@ -326,11 +329,6 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
         }
         for (i = 0; i < pot.size(); ++i)
             pot[i] -= pmin;
-
-        if (logScale)
-            for (i = 0; i < pot.size(); ++i)
-                pot[i] = log10(pot[i]);
-
         std::stringstream label;
         label.setf(label.scientific, label.floatfield);
 
@@ -444,13 +442,13 @@ int main(int argc, char* argv[])
 
             auto n = la::option("-h_n", n1);
             auto d = la::option("-h_d", 8);
-            auto amp = la::option("-h_amp", 8.0);
+            auto amp = la::option("-h_amp", 2.65);
 
             auto potential = coulomb(amp);
             auto solver = solve_schrödinger(name, bm, n, d, potential);
             dump_eigenvalues(name, solver);
             if (la::option("-h_plot", plot1))
-                plot_eigenvectors(name, solver, potential);
+                plot_eigenvectors(name, solver, potential, la::option("-h_log", PETSC_FALSE));
         }
         if (la::option("-morse", do1))
         {
@@ -504,7 +502,7 @@ int main(int argc, char* argv[])
 
             auto n = la::option("-h2_n", n2);
             auto d = la::option("-h2_d", 4);
-            auto amp = la::option("-h2_amp", 8.0);
+            auto amp = la::option("-h2_amp", 2.65);
 
             auto potential = la::radial(coulomb(amp));
             auto solver = solve_schrödinger(name, bm, n, n, d, potential);

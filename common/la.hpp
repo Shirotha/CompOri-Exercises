@@ -123,10 +123,11 @@ namespace la
         if (min >= 0.0)
             min = -max;
 
+        auto p = pot.potential;
         return {
-            [&pot](PetscReal x, PetscReal y) 
+            [p](PetscReal x, PetscReal y) 
             {
-                return pot.potential(sqrt(x * x + y * y));
+                return p(sqrt(x * x + y * y));
             },
             {{ min, min},
              { max, max }}
@@ -140,10 +141,11 @@ namespace la
         if (min >= 0.0)
             min = -max;
 
+        auto p = pot.potential;
         return {
-            [&pot](PetscReal x, PetscReal y, PetscReal z) 
+            [p](PetscReal x, PetscReal y, PetscReal z) 
             {
-                return pot.potential(sqrt(x * x + y * y + z * z));
+                return p(sqrt(x * x + y * y + z * z));
             },
             {{ min, min, min },
              { max, max, max }}
@@ -345,7 +347,7 @@ namespace la
     {
         ::EPS eps;
         std::shared_ptr<Matrix> matrix;
-
+        // NOTE: support multiple solvers (rqcg seems good but slow)
         EigenSolver(std::shared_ptr<Matrix> mat, const EPSProblemType type, const PetscInt dimension) : matrix(mat)
         {
             E(EPSCreate(PETSC_COMM_WORLD, &eps));
