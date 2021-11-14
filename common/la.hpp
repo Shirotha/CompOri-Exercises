@@ -9,10 +9,48 @@
 
 static PetscErrorCode ierr;
 #define E(X) do { ierr = (X); if (PetscUnlikely(ierr)) { PetscError(PETSC_COMM_SELF,__LINE__,PETSC_FUNCTION_NAME,__FILE__,ierr,PETSC_ERROR_REPEAT," "); throw ierr; } } while(0)
-#define PRINT(format, args...) E(PetscPrintf(PETSC_COMM_WORLD, format "\n", args))
+#define PRINT(format, ...) E(PetscPrintf(PETSC_COMM_WORLD, format "\n", ##__VA_ARGS__))
+
+enum DIM
+{
+    X = 0,
+    Y = 1,
+    Z = 2
+};
 
 namespace la
 {
+    template<typename T>
+    T option(const std::string& name, const T deflt);
+    template<>
+    PetscInt option(const std::string& name, const PetscInt deflt)
+    {
+        PetscInt result = deflt;
+        PetscOptionsGetInt(NULL, NULL, name.c_str(), &result, NULL);
+        return result;
+    }
+    template<>
+    PetscBool option(const std::string& name, const PetscBool deflt)
+    {
+        PetscBool result = deflt;
+        PetscOptionsGetBool(NULL, NULL, name.c_str(), &result, NULL);
+        return result;
+    }
+    template<>
+    PetscReal option(const std::string& name, const PetscReal deflt)
+    {
+        PetscReal result = deflt;
+        PetscOptionsGetReal(NULL, NULL, name.c_str(), &result, NULL);
+        return result;
+    }
+    template<>
+    PetscScalar option(const std::string& name, const PetscScalar deflt)
+    {
+        PetscScalar result = deflt;
+        PetscOptionsGetScalar(NULL, NULL, name.c_str(), &result, NULL);
+        return result;
+    }
+
     struct Vector;
 
     constexpr std::array<PetscScalar, 3> CFD_D1_A2 { -1.0 / 2.0, 0.0, -1.0 / 2.0 };
@@ -31,8 +69,8 @@ namespace la
             if constexpr(A == 2)
                 return CFD_D2_A2;
         }
-
-        throw "unsupported fd order";
+        else
+            throw "unknown CFD params";
     } 
 
     template<typename T>
@@ -53,103 +91,64 @@ namespace la
         }
     };
 
-    typedef std::function<PetscScalar(PetscReal)> Potential;
+    typedef std::function<PetscScalar(PetscReal)> Potential1d;
+    typedef std::function<PetscScalar(PetscReal, PetscReal)> Potential2d;
+    typedef std::function<PetscScalar(PetscReal, PetscReal, PetscReal)> Potential3d;
+    typedef std::pair<Triple<PetscReal>, Triple<PetscReal>> Interval;
 
+    template<typename T>
     struct SpecializedPotential
     {
-        Potential potential;
-        std::pair<Triple<PetscReal>, Triple<PetscReal>> range;
+        T potential;
+        Interval range;
 
-        SpecializedPotential(Potential pot, std::pair<Triple<PetscReal>, Triple<PetscReal>> rng) : potential(pot), range(rng) {}
+        SpecializedPotential(T pot, Interval rng) : potential(pot), range(rng) {}
     };
 
-    template<typename... Ts>
+    template<typename P, typename... Ts>
     struct PotentialFamily
     {
-        virtual Potential get(Ts... args) = 0;
-        virtual std::pair<Triple<PetscReal>, Triple<PetscReal>> range(Ts ...args) = 0;
-        virtual SpecializedPotential operator()(Ts ...args)
+        virtual P get(Ts... args) = 0;
+        virtual Interval range(Ts ...args) = 0;
+        virtual SpecializedPotential<P> operator()(Ts ...args)
         {
             return { get(args...), range(args...) };
         }
     };
 
-    struct Harmonic : PotentialFamily<PetscReal>
+    SpecializedPotential<Potential2d> radial(const SpecializedPotential<Potential1d>& pot)
     {
-        Potential get(PetscReal omega)
-        {
-            const double c = 0.5 * omega * omega;
-            return [c](PetscReal x) 
-            { 
-                return c * x * x; 
-            };
-        }
-        std::pair<Triple<PetscReal>, Triple<PetscReal>> range(PetscReal omega)
-        {
-            constexpr PetscReal threshold = 4.0;
-            PetscReal x = threshold / sqrt(omega);
-            return { -x, x };
-        }
-    } harmonic;
+        PetscReal max = pot.range.second.x;
+        PetscReal min = pot.range.first.x;
+        if (min >= 0.0)
+            min = -max;
 
-    struct Coulomb : PotentialFamily<PetscReal>
-    {
-        Potential get(PetscReal amp)
-        {
-            auto r = range(amp);
-            PetscReal min = -200.0 / (r.second.x - r.first.x);
-            return [amp, min](PetscReal x) 
-            { 
-                PetscReal y = -amp / abs(x);
-                if (y < min)
-                    return min;
-                return y;
-            };
-        }
-        std::pair<Triple<PetscReal>, Triple<PetscReal>> range(PetscReal amp)
-        {
-            constexpr PetscReal threshold = 1e-1;
-            PetscReal x = sqrt(1/threshold * amp);
-            return { -x, x };
-        }
-    } coulomb;
-
-    struct Morse : PotentialFamily<PetscReal, PetscReal>
-    {
-        Potential get(PetscReal r0, PetscReal depth)
-        {
-            PetscReal a = 1.0 / sqrt(2 * depth);
-            return [r0, depth, a](PetscReal x)
+        return {
+            [&pot](PetscReal x, PetscReal y) 
             {
-                PetscReal e = 1 - exp(-a * (x - r0));
-                return depth * e * e;
-            };
-        }
-        std::pair<Triple<PetscReal>, Triple<PetscReal>> range(PetscReal r0, PetscReal depth)
-        {
-            constexpr PetscReal threshold = 0.99;
-            return { 0.0, sqrt(2 * depth) * log(1.0 / (1 - sqrt(threshold))) };
-        }
-    } morse;
+                return pot.potential(sqrt(x * x + y * y));
+            },
+            {{ min, min},
+             { max, max }}
+        };
+    }
 
-    struct DoubleWell : PotentialFamily<PetscReal, PetscReal>
+    SpecializedPotential<Potential3d> spherical(const SpecializedPotential<Potential1d>& pot)
     {
-        Potential get(PetscReal h, PetscReal c)
-        {
-            PetscReal h4_4 = 0.25 * h * h * h * h, c2_2 = 0.5 * c * c;
-            return [h4_4, c2_2](PetscReal x)
+        PetscReal max = pot.range.second.x;
+        PetscReal min = pot.range.first.x;
+        if (min >= 0.0)
+            min = -max;
+
+        return {
+            [&pot](PetscReal x, PetscReal y, PetscReal z) 
             {
-                PetscReal x2 = x * x;
-                return c2_2 * x2 * x2 - h4_4 * x2;
-            };
-        }
-        std::pair<Triple<PetscReal>, Triple<PetscReal>> range(PetscReal h, PetscReal c)
-        {
-            constexpr PetscReal threshold = 0.6;
-            PetscReal x = threshold * sqrt(1 + sqrt(3)) * h * h / c;
-            return { -x, x };
-        }
-    } doubleWell;
+                return pot.potential(sqrt(x * x + y * y + z * z));
+            },
+            {{ min, min, min },
+             { max, max, max }}
+        };
+    }
 
     struct Grid
     {
@@ -170,7 +169,7 @@ namespace la
         Triple<PetscInt> end;
 
         Grid(const DMBoundaryType boundary, const PetscInt count, const PetscInt dof, const PetscInt stencil, const PetscReal min, const PetscReal max) :
-            dimension(1), boundary(boundary), size(count), dof(dof), stencil(stencil), min(min), max(max), step((max - min) / count)
+            dimension(1), boundary(boundary), size(count, 1, 1), dof(dof), stencil(stencil), min(min), max(max), step((max - min) / count)
         {
             E(DMDACreate1d(PETSC_COMM_WORLD, boundary, count, dof, stencil, NULL, &dm));
             E(DMSetFromOptions(dm));
@@ -178,12 +177,12 @@ namespace la
             E(DMDASetUniformCoordinates(dm, min, max, min, max, min, max));
             DMDALocalInfo info;
             E(DMDAGetLocalInfo(dm, &info));
-            begin = info.xs;
-            end = info.xs + info.mx;
+            begin = { info.xs, 0, 0 };
+            end = { info.xs + info.mx, 1, 1 };
         }
 
         Grid(const DMBoundaryType boundaryx, const DMBoundaryType boundaryy, const PetscInt countx, const PetscInt county, const PetscInt dof, const PetscInt stencil, const PetscReal minx, const PetscReal maxx, const PetscReal miny, const PetscReal maxy) :
-            dimension(2), boundary(boundaryx, boundaryy), size(countx, county), dof(dof), stencil(stencil), min(minx, miny), max(maxx, maxy), step((maxx - minx) / countx, (maxy - miny) / county)
+            dimension(2), boundary(boundaryx, boundaryy), size(countx, county, 1), dof(dof), stencil(stencil), min(minx, miny), max(maxx, maxy), step((maxx - minx) / countx, (maxy - miny) / county)
         {
             E(DMDACreate2d(PETSC_COMM_WORLD, boundaryx, boundaryy, DMDA_STENCIL_BOX, countx, county, PETSC_DECIDE, PETSC_DECIDE, dof, stencil, NULL, NULL, &dm));
             E(DMSetFromOptions(dm));
@@ -191,8 +190,8 @@ namespace la
             E(DMDASetUniformCoordinates(dm, minx, maxx, miny, maxy, miny, maxy));
             DMDALocalInfo info;
             E(DMDAGetLocalInfo(dm, &info));
-            begin = { info.xs, info.ys };
-            end = { info.xs + info.mx, info.ys + info.my };
+            begin = { info.xs, info.ys, 0 };
+            end = { info.xs + info.mx, info.ys + info.my, 1 };
         }
 
         Grid(const DMBoundaryType boundaryx, const DMBoundaryType boundaryy, const DMBoundaryType boundaryz, const PetscInt countx, const PetscInt county, const PetscInt countz, const PetscInt dof, const PetscInt stencil, const PetscReal minx, const PetscReal maxx, const PetscReal miny, const PetscReal maxy, const PetscReal minz, const PetscReal maxz) :
@@ -208,11 +207,11 @@ namespace la
             end = { info.xs + info.mx, info.ys + info.my, info.zs + info.mz };
         }
 
-        std::shared_ptr<PetscScalar[]> getPoints() const
+        std::shared_ptr<void> getPoints() const
         {
-            PetscScalar* ptr;
+            void* ptr;
             E(DMDAGetCoordinateArray(dm, &ptr));
-            std::shared_ptr<PetscScalar[]> buffer(ptr, [this](PetscScalar* ptr) 
+            std::shared_ptr<void> buffer(ptr, [this](void* ptr) 
             {  
                 E(DMDARestoreCoordinateArray(this->dm, &ptr));
             });
@@ -240,8 +239,8 @@ namespace la
         {
             ierr = MatDestroy(&mat);
         }
-        // TODO: support 2d, 3d
-        template<int D, int A>
+        
+        template<int D, int A, DIM I = X>
         constexpr void apply_cfd(const InsertMode insert, const PetscScalar scale = 1.0)
         {
             constexpr PetscInt n = (D + 3) / 2 + A / 2;
@@ -249,33 +248,57 @@ namespace la
             
             constexpr auto coeff = la::cfd<D, A>();
             std::array<PetscScalar, n> values;
-
+            
             MatStencil row[1], col[n];
-            PetscInt i, di, c;
+            PetscInt i, j, k, di, c;
             
             for (i = 0; i < n; ++i)
-                values[i] = coeff[i] * scale / pow(grid->step, D);
+                if constexpr(I == X)
+                    values[i] = coeff[i] * scale / pow(grid->step.x, D);
+                else if constexpr(I == Y)
+                    values[i] = coeff[i] * scale / pow(grid->step.y, D);
+                else if constexpr(I == Z)
+                    values[i] = coeff[i] * scale / pow(grid->step.z, D);
+                else
+                    throw "unknown dimension";
             
-            for (i = grid->begin; i < grid->end; ++i)
-            {
-                row->i = i;
-                for (di = 0; di < n; ++di)
-                    col[di].i = i + di - mi;
+            for (k = grid->begin.z; k < grid->end.z; ++k)
+                for (j = grid->begin.y; j < grid->end.y; ++j)
+                    for (i = grid->begin.x; i < grid->end.x; ++i)
+                    {
+                        row->i = i;
+                        row->j = j;
+                        row->k = k;
+                        for (di = 0; di < n; ++di)
+                        {
+                            col[di].i = i;
+                            col[di].j = j;
+                            col[di].k = k;
+                        }
+                        for (di = 0; di < n; ++di)
+                            if constexpr(I == X)
+                                col[di].i = i + di - mi;
+                            else if constexpr(I == Y)
+                                col[di].j = j + di - mi;
+                            else if constexpr(I == Z)
+                                col[di].k = k + di - mi;
+                            else
+                                throw "unknown dimension";
 
-                for (c = 0; c < grid->dof; ++c)
-                {
-                    row->c = c;
-                    for (di = 0; di < n; ++di)
-                        col[di].c = c;
+                        for (c = 0; c < grid->dof; ++c)
+                        {
+                            row->c = c;
+                            for (di = 0; di < n; ++di)
+                                col[di].c = c;
 
-                    E(MatSetValuesStencil(mat, 1, row, n, col, values.data(), insert));
-                }
-            }
+                            E(MatSetValuesStencil(mat, 1, row, n, col, values.data(), insert));
+                        }
+                    }
         }
-        // TODO: support 2d, 3d
-        void apply_diagonal(const InsertMode insert, const std::shared_ptr<Vector> diag);
-        // TODO: support 2d, 3d
-        void apply_diagonal(const InsertMode insert, const Potential&& func);
+        
+        void apply_diagonal(const InsertMode insert, const Potential1d&& func);
+        void apply_diagonal(const InsertMode insert, const Potential2d&& func);
+        void apply_diagonal(const InsertMode insert, const Potential3d&& func);
 
         void assemble(const MatAssemblyType type)
         {
@@ -398,23 +421,58 @@ namespace la
         }
     };
 
-    // TODO: support 2d, 3d
-    void la::Matrix::apply_diagonal(const InsertMode insert, const std::shared_ptr<la::Vector> diag)
-    {
-        E(MatDiagonalSet(mat, diag->vec, insert));
-    }
-    // TODO: support 2d, 3d
-    void Matrix::apply_diagonal(const InsertMode insert, const Potential&& func)
+    void Matrix::apply_diagonal(const InsertMode insert, const Potential1d&& func)
     {
         Vector vec(grid);
-        auto points = grid->getPoints();
+        auto ptr = grid->getPoints();
+        PetscScalar* points = (PetscScalar*)ptr.get();;
         for (int i = 0; i < grid->size; ++i)
-        {
             E(VecSetValue(vec.vec, i, func(points[i].real()), INSERT_VALUES));
-        }
+        
         vec.assemble();
 
         E(MatDiagonalSet(mat, vec.vec, insert));
+    }
+    void Matrix::apply_diagonal(const InsertMode insert, const Potential2d&& func)
+    {
+        auto ptr = grid->getPoints();
+        PetscScalar** points = (PetscScalar**)ptr.get();
+
+        PetscScalar v;
+        MatStencil row, col;
+        PetscInt i, j;
+        for (j = grid->begin.y; j < grid->end.y; ++j)
+            for (i = grid->begin.x; i < grid->end.x; ++i)
+            {
+                row.i = i;
+                row.j = j;
+                col.i = i;
+                col.j = j;
+                v = func(points[j][2 * i].real(), points[j][2 * i + 1].real());
+                E(MatSetValuesStencil(mat, 1, &row, 1, &col, &v, insert));
+            }
+    }
+    void Matrix::apply_diagonal(const InsertMode insert, const Potential3d&& func)
+    {
+        auto ptr = grid->getPoints();
+        PetscScalar*** points = (PetscScalar***)ptr.get();
+
+        PetscScalar v;
+        MatStencil row, col;
+        PetscInt i, j, k;
+        for (k = grid->begin.z; k < grid->end.z; ++k)
+            for (j = grid->begin.y; j < grid->end.y; ++j)
+                for (i = grid->begin.x; i < grid->end.x; ++i)
+                {
+                    row.i = i;
+                    row.j = j;
+                    row.k = k;
+                    col.i = i;
+                    col.j = j;
+                    col.k = k;
+                    v = func(points[k][j][3 * i].real(), points[k][j][3 * i + 1].real(), points[k][j][3 * i + 2].real());
+                    E(MatSetValuesStencil(mat, 1, &row, 1, &col, &v, insert));
+                }
     }
 
 }

@@ -87,10 +87,12 @@ end
 CLOBBER.include OUT
 
 SOURCE_FILES = Rake::FileList[File.join(DIR, "*.c"), File.join(DIR, "*.cpp"), CCOMMON.map { |i| File.join(i, "*.c")}, CCOMMON.map { |i| File.join(i, "*.cpp")}]
+HEADER_FILES = Rake::FileList[File.join(DIR, "*.hpp"), CCOMMON.map { |i| File.join(i, "*.hpp") }]
+PCH_FILES = HEADER_FILES.ext ".hpp.pch"
 OBJECT_FILES = SOURCE_FILES.ext ".o"
 DEPEND_FILES = SOURCE_FILES.ext ".mf"
 
-task :default => [:build, :clean, :run]
+task :default => [:build, :run]
 
 desc "Create a new program with main file [file]"
 task :create, [:file] do |t, args|
@@ -101,14 +103,17 @@ task :create, [:file] do |t, args|
 end
 
 desc "Run the program"
-task :run => :build do |t|
+task :run => :build do |t, args|
 	# sh "#{MPIEXEC} -n 2 #{OUT}"
-	sh OUT
+	sh OUT, *args.extras
 end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
-	sh "#{CXX} #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
+	PCH_FILES.each { |f| Rake::Task[f].invoke }
+	unless uptodate?(OUT, [*OBJECT_FILES, *PCH_FILES])
+		sh "#{CXX} -H #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
+	end
 end
 
 rule ".o" => ".c" do |t|
@@ -117,6 +122,10 @@ end
 
 rule ".o" => ".cpp" do |t|
 	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
+end
+
+rule ".hpp.pch" => ".hpp" do |t|
+	sh "#{CXX} -x c++-header #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
 
 rule ".mf" => ".c" do |t|
@@ -141,3 +150,5 @@ end
 
 DEPEND_FILES.each { |dep| import dep }
 DEPEND_FILES.each { |dep| file dep }
+
+PCH_FILES.each { |f| file f }
