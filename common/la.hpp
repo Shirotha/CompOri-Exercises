@@ -50,6 +50,13 @@ namespace la
         PetscOptionsGetScalar(NULL, NULL, name.c_str(), &result, NULL);
         return result;
     }
+    template<>
+    DMBoundaryType option(const std::string& name, const DMBoundaryType deflt)
+    {
+        DMBoundaryType result = deflt;
+        E(PetscOptionsGetEnum(NULL, NULL, name.c_str(), DMBoundaryTypes, (PetscEnum*)&result, NULL));
+        return result;
+    }
 
     struct Vector;
 
@@ -121,7 +128,10 @@ namespace la
         PetscReal max = pot.range.second.x;
         PetscReal min = pot.range.first.x;
         if (min >= 0.0)
+        {
+            max /= 2.0;
             min = -max;
+        }
 
         auto p = pot.potential;
         return {

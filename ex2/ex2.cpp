@@ -97,7 +97,9 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     PRINT("Matrix Size = %i", n);
     PRINT("Range = %5E..%5E", potential.range.first.x, potential.range.second.x);
     
-    auto grid = std::make_shared<la::Grid>(DM_BOUNDARY_GHOSTED, n, 1, 1, potential.range.first.x, potential.range.second.x);
+    auto bnd = la::option("-boundary", DM_BOUNDARY_GHOSTED);
+
+    auto grid = std::make_shared<la::Grid>(la::option("-boundaryX", bnd), n, 1, 1, potential.range.first.x, potential.range.second.x);
     auto H = std::make_shared<la::Matrix>(grid);
     PRINT("Step = %5E", grid->step.x);
     
@@ -126,7 +128,9 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     PRINT("X Range = %5E..%5E", potential.range.first.x, potential.range.second.x);
     PRINT("Y Range = %5E..%5E", potential.range.first.y, potential.range.second.y);
     
-    auto grid = std::make_shared<la::Grid>(DM_BOUNDARY_GHOSTED, DM_BOUNDARY_GHOSTED, n, m, 1, 1, potential.range.first.x, potential.range.second.x, potential.range.first.y, potential.range.second.y);
+    auto bnd = la::option("-boundary", DM_BOUNDARY_GHOSTED);
+
+    auto grid = std::make_shared<la::Grid>(la::option("-boundaryX", bnd), la::option("-boundaryY", bnd), n, m, 1, 1, potential.range.first.x, potential.range.second.x, potential.range.first.y, potential.range.second.y);
     
     auto H = std::make_shared<la::Matrix>(grid);
     PRINT("X Step = %5E", grid->step.x);
@@ -159,7 +163,9 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     PRINT("Y Range = %5E..%5E", potential.range.first.y, potential.range.second.y);
     PRINT("Z Range = %5E..%5E", potential.range.first.z, potential.range.second.z);
     
-    auto grid = std::make_shared<la::Grid>(DM_BOUNDARY_GHOSTED, DM_BOUNDARY_GHOSTED, DM_BOUNDARY_GHOSTED, n, m, o, 1, 1, potential.range.first.x, potential.range.second.x, potential.range.first.y, potential.range.second.y, potential.range.first.z, potential.range.second.z);
+    auto bnd = la::option("-boundary", DM_BOUNDARY_GHOSTED);
+
+    auto grid = std::make_shared<la::Grid>(la::option("-boundaryX", bnd), la::option("-boundaryY", bnd), la::option("-boundaryZ", bnd), n, m, o, 1, 1, potential.range.first.x, potential.range.second.x, potential.range.first.y, potential.range.second.y, potential.range.first.z, potential.range.second.z);
     
     auto H = std::make_shared<la::Matrix>(grid);
     PRINT("X Step = %5E", grid->step.x);
@@ -359,7 +365,7 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
             plot.gnuplot(label.str());
             label.str("");
 
-            plot.drawCurve(xs, ys, pot).labelNone();
+            //plot.drawCurve(xs, ys, pot).labelNone();
 
             solver->getEigenpair(i, ev, *x, error);
             auto vec = x->getArray();
@@ -374,7 +380,7 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
             max = 1.0 / max;
             for (j = 0; j < zs.size(); ++j)
             {
-                tmp = zs[j] * max + ev.real() - pmin;
+                tmp = zs[j] * max /*+ ev.real() - pmin*/;
                 if (logScale)
                     tmp = log10(tmp);
                 if (tmp > zmax)
@@ -388,7 +394,7 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
             plot.drawCurve(xs, ys, zs).label(label.str());
             label.str("");
 
-            plot.zrange(zmin - 0.01 * (zmax - zmin), zmax);
+            plot.zrange(0.0, 1.0);
 
             plots[i / rows].push_back(plot);
         }
@@ -411,7 +417,11 @@ int main(int argc, char* argv[])
         MPI_Comm_size(PETSC_COMM_WORLD, &size);
         MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
         PRINT("MPI Size = %i, MPI Rank = %i", size, rank);
-
+        /*
+        PetscInt test = 1;
+        E(PetscOptionsGetInt(NULL, "pre", "-test", &test, NULL));
+        PRINT("")
+        */
         auto n1 = la::option("-n1", 200);
         auto n2 = la::option("-n2", 20);
         auto n3 = la::option("-n3", 8);
@@ -467,7 +477,6 @@ int main(int argc, char* argv[])
         }
         if (la::option("-dw", do1))
         {
-            // TODO: find better parameters
             const std::string name("Double-Well");
 
             auto n = la::option("-dw_n", n1);
@@ -497,7 +506,6 @@ int main(int argc, char* argv[])
         }
         if (la::option("-h2", do2))
         {
-            // FIXME:: wierd results
             const std::string name("2D-H-Atom");
 
             auto n = la::option("-h2_n", n2);
@@ -510,9 +518,8 @@ int main(int argc, char* argv[])
             if (la::option("-h2_plot", plot2))
                 plot_eigenvectors(name, solver, potential);
         }
-        if (la::option("-morse2", /*do2*/PETSC_FALSE))
+        if (la::option("-morse2", do2))
         {
-            // FIXME: crashes in the solver for some reason
             const std::string name("2D-Morse");
 
             auto n = la::option("-morse2_n", n2);
@@ -559,7 +566,7 @@ int main(int argc, char* argv[])
     PRINT("Setup = %9E +/- %9E", bm[0], bm.getError());
     PRINT("Solve = %9E +/- %9E", bm[1], bm.getError());
     */
-    PRINT("Total = %9E +/- %9E", bm.getTotal(), bm.getError());
+    PRINT("Total Time = %9E +/- %9E", bm.getTotal(), bm.getError());
     E(SlepcFinalize());
 
     return ierr;
