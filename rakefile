@@ -1,9 +1,9 @@
 PETSC_DIR = "../compori2122-master/petscbuild/petsc-3.15.4"
 SLEPC_DIR = "../compori2122-master/petscbuild/slepc-3.15.1"
-PETSC_ARCH = "opt"
+PETSC_ARCH = ENV["arch"] || "opt"
 
 CXX = "#{PETSC_DIR}/#{PETSC_ARCH}/bin/mpicxx"
-MPIEXEC = "mpiexec"
+MPIEXEC = "#{PETSC_DIR}/#{PETSC_ARCH}/bin/mpiexec"
 CFLAGS = %W{
 	-std=c++20
 
@@ -28,16 +28,35 @@ LFLAGS = %W{
 
 	-Wl,-rpath,#{PETSC_DIR}/#{PETSC_ARCH}/lib
 	-L#{PETSC_DIR}/#{PETSC_ARCH}/lib
+
+	-Wl,-rpath,/opt/intel/mkl/lib/intel64
+	-L/opt/intel/mkl/lib/intel64
+
 	-L/usr/lib/gcc/x86_64-linux-gnu/10
 	-lpetsc
 	
+	-lumfpack
+	-lklu
+	-lcholmod
+	-lbtf
+	-lccolamd
+	-lcolamd
+	-lcamd
+	-lamd
+	-lsuitesparseconfig
+	-lsuperlu
+	-lsuperlu_dist
+
 	-lfftw3_mpi
 	-lfftw3
 
-	-llapack
-	-lblas
-	
+	-lmkl_intel_lp64
+	-lmkl_core
+	-lmkl_sequential
+
+	-lpthread
 	-lm
+	-llcg
 	-lstdc++
 	-ldl
 	-lmpifort
@@ -103,17 +122,29 @@ task :create, [:file] do |t, args|
 end
 
 desc "Run the program"
-task :run => :build do |t, args|
-	# sh "#{MPIEXEC} -n 2 #{OUT}"
-	sh OUT, *args.extras.map(&:split).flatten
+task :run, [:cores] => :build do |t, args|
+	args.with_defaults(cores: 1)
+	cores = 1
+	options = args.extras.map(&:split).flatten
+	if args.cores.to_i > 0
+		cores = args.cores.to_i
+	else
+		options.unshift *args.cores.split
+	end
+
+	if cores > 1
+		sh MPIEXEC, "-n", cores.to_s, OUT, *options
+	else
+		sh OUT, *options
+	end
 end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
 	PCH_FILES.each { |f| Rake::Task[f].invoke }
-	unless uptodate?(OUT, [*OBJECT_FILES, *PCH_FILES])
+	#unless uptodate?(OUT, [*OBJECT_FILES, *PCH_FILES])
 		sh "#{CXX} -H #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
-	end
+	#end
 end
 
 rule ".o" => ".c" do |t|

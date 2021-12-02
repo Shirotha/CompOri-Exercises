@@ -102,7 +102,8 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     auto grid = std::make_shared<la::Grid>(la::option("-boundaryX", bnd), n, 1, 1, potential.range.first.x, potential.range.second.x);
     auto H = std::make_shared<la::Matrix>(grid);
     PRINT("Step = %5E", grid->step.x);
-    
+    PRINTL("Local Ownership = %i..%i", grid->begin.x, grid->end.x);
+
     H->apply_cfd<2, 2>(ADD_VALUES, -0.5);
     H->apply_diagonal(ADD_VALUES, std::move(potential.potential));
 
@@ -113,7 +114,7 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     bm.lap();
     
     solver->solve();
-
+    
     bm.lap();
 
     PRINT("Iterations = %i", solver->getNumIterations());
@@ -135,6 +136,8 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     auto H = std::make_shared<la::Matrix>(grid);
     PRINT("X Step = %5E", grid->step.x);
     PRINT("Y Step = %5E", grid->step.y);
+    PRINTL("Local Ownership X = %i..%i", grid->begin.x, grid->end.x);
+    PRINTL("Local Ownership Y = %i..%i", grid->begin.y, grid->end.y);
     
     H->apply_cfd<2, 2, X>(ADD_VALUES, -0.5);
     H->apply_cfd<2, 2, Y>(ADD_VALUES, -0.5);
@@ -172,6 +175,10 @@ std::shared_ptr<la::EigenSolver> solve_schrödinger(const std::string& name, bm:
     PRINT("Y Step = %5E", grid->step.y);
     PRINT("Z Step = %5E", grid->step.z);
 
+    PRINTL("Local Ownership X = %i..%i", grid->begin.x, grid->end.x);
+    PRINTL("Local Ownership Y = %i..%i", grid->begin.y, grid->end.y);
+    PRINTL("Local Ownership Z = %i..%i", grid->begin.z, grid->end.z);
+
     H->apply_cfd<2, 2, X>(ADD_VALUES, -0.5);
     H->apply_cfd<2, 2, Y>(ADD_VALUES, -0.5);
     H->apply_cfd<2, 2, Z>(ADD_VALUES, -0.5);
@@ -198,6 +205,7 @@ void dump_eigenvalues(const std::string& name, const std::shared_ptr<la::EigenSo
     PRINT("Converged Eigenvalues = %i", n);
 
     PetscScalar ev;
+    // MPI stalls here
     auto x = std::make_shared<la::Vector>(solver->matrix->grid);
     PetscReal error;
     for (int i = 0; i < n; ++i)
@@ -209,13 +217,15 @@ void dump_eigenvalues(const std::string& name, const std::shared_ptr<la::EigenSo
 
 void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenSolver> solver, const la::SpecializedPotential<la::Potential1d>& potential, bool logScale=false)
 {
+    PetscMPIInt id;
+    MPI_Comm_rank(PETSC_COMM_WORLD, &id);
     size_t i, j, n = solver->getNumEigenpairs();
 
     if (n > 0)
     {
         plt::Plot plot;
         plot.size(1300, 650);
-        // TODO: set window title to name
+
         plot.xlabel("x");
         plot.ylabel("E - V_{min}");
 
@@ -299,12 +309,15 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
         plt::Figure fig(plots);
         fig.size(1300, 650);
         fig.title(name);
-        fig.show();
+        //if (!id)
+            fig.show();
     }
 }
 
 void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenSolver> solver, const la::SpecializedPotential<la::Potential2d>& potential, bool logScale=false)
 {
+    PetscMPIInt id;
+    MPI_Comm_rank(PETSC_COMM_WORLD, &id);
     size_t i, j, n = solver->getNumEigenpairs();
     size_t rows = sqrt(n);
     if (n > 0)
@@ -402,7 +415,8 @@ void plot_eigenvectors(const std::string& name, const std::shared_ptr<la::EigenS
         plt::Figure fig(plots);
         fig.size(1300, 650);
         fig.title(name);
-        fig.show();
+        if (!id)
+            fig.show();
     }
 }
 
@@ -418,9 +432,34 @@ int main(int argc, char* argv[])
         MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
         PRINT("MPI Size = %i, MPI Rank = %i", size, rank);
         /*
-        PetscInt test = 1;
-        E(PetscOptionsGetInt(NULL, "pre", "-test", &test, NULL));
-        PRINT("")
+         * Implement nested options blocks
+         * // design struct so options can fetch all members
+         * options.get("-x", default);
+         * {
+         *     auto pre = options.using("pre");
+         *     pre.get("-x") // has outer block -x value as default (fail if -x doesnt exist in all outer blocks and no default is provided here)
+         *     {
+         *         auto pre2 = pre.using("pre2")
+         *         // nested prefixes -> -pre_pre2_x
+         *     }
+         *     // ...
+         * }
+         */
+        /*
+        PetscInt test = 0;
+        PetscBool flag;
+        PetscOptionsBegin(PETSC_COMM_WORLD, "pre1_", "desc", "man");
+        PetscOptionsBegin(PETSC_COMM_WORLD, "pre1_pre2_", "desc", "man");
+        
+        PetscOptionsEnd();
+        PetscOptionsInt("-test", "test desc", "man", 1, &test, &flag);
+        if (!flag)
+            test = 1;
+        PetscOptionsEnd();
+        PRINT("test = %i", test);
+
+        SlepcFinalize();
+        return ierr;
         */
         auto n1 = la::option("-n1", 200);
         auto n2 = la::option("-n2", 20);
