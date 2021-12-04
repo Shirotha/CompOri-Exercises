@@ -22,11 +22,14 @@ struct AppCtx : la::OptimizerContext
     }
 
     // f(x, y) = (x - 2)^2 + (y - 2)^2 - 2(x + y)
-    // df = (2(x - 2) - 2) dx + (2(y - 2) - 2) dy
-    void calcValueGradient(la::ScalarAR x, la::Scalar f, la::ScalarA g)
+    PetscScalar calcValue(la::ScalarAR x)
     {
-        *f = SQ(x[0] - 2.0) + SQ(x[1] - 2.0) - 2.0 * (x[0] + x[1]);
+        return SQ(x[0] - 2.0) + SQ(x[1] - 2.0) - 2.0 * (x[0] + x[1]);
+    }
 
+    // df = (2(x - 2) - 2) dx + (2(y - 2) - 2) dy
+    void calcGradient(la::ScalarAR x, la::ScalarA g)
+    {
         g[0] = 2.0 * (x[0] - 2.0) - 2.0;
         g[1] = 2.0 * (x[1] - 2.0) - 2.0;
     }
@@ -72,6 +75,24 @@ struct AppCtx : la::OptimizerContext
     }
 };
 
+struct SimpleCtx : la::OptimizerContext
+{
+    SimpleCtx() : la::OptimizerContext(TAOLMVM, 1, 0, 0)
+    {
+        setup();
+    }
+
+    PetscScalar calcValue(la::ScalarAR x)
+    {
+        return SQ(x[0] - 1.0) - 1.0;
+    }
+
+    void calcGradient(la::ScalarAR x, la::ScalarA g)
+    {
+        g[0] = 2.0 * (x[0] - 1.0);
+    }
+};
+
 int main(int argc, char** argv)
 {
     E(PetscInitialize(&argc, &argv, NULL, NULL));
@@ -81,7 +102,15 @@ int main(int argc, char** argv)
         auto reason = ctx.solve();
 
         auto x = ctx.state.readArray();
-        PRINT("f(%9E, %9E) = %9E (%i)", x[0], x[1], 0.0, reason);        
+        PRINT("f(%9E, %9E) = %9E (%s)", x[0], x[1], ctx.calcValue(x), TaoConvergedReasons[reason]);        
+    }
+    {
+        SimpleCtx ctx;
+        
+        auto reason = ctx.solve();
+
+        auto x = ctx.state.readArray();
+        PRINT("f(%9E) = %9E (%s)", x[0], ctx.calcValue(x), TaoConvergedReasons[reason]);   
     }
     E(PetscFinalize());
 

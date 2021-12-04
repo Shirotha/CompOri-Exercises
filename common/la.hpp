@@ -259,6 +259,9 @@ namespace la
 
         Matrix(const PetscInt n, const PetscInt m, const PetscInt nonzero)
         {
+            if (n <= 0 || m <= 0)
+                return;
+                
             E(MatCreateSeqAIJ(PETSC_COMM_WORLD, n, m, nonzero, NULL, &mat));
             E(MatSetFromOptions(mat));
             E(MatSetUp(mat));
@@ -266,6 +269,9 @@ namespace la
 
         Matrix(const PetscInt n, const PetscInt m)
         {
+            if (n <= 0 || m <= 0)
+                return;
+
             E(MatCreate(PETSC_COMM_WORLD, &mat));
             E(MatSetSizes(mat, PETSC_DECIDE, PETSC_DECIDE, n, m));
             E(MatSetFromOptions(mat));
@@ -387,7 +393,9 @@ namespace la
 
         Vector(PetscInt n)
         {
-            //E(VecCreateSeq(PETSC_COMM_WORLD, n, &vec));
+            if (n <= 0)
+                return;
+
             E(VecCreate(PETSC_COMM_WORLD, &vec));
             E(VecSetSizes(vec, PETSC_DECIDE, n));
             E(VecSetFromOptions(vec));
@@ -663,7 +671,8 @@ namespace la
         virtual void initialize() { }
         virtual void lateInitialize() { }
         virtual void finalize() { }
-        virtual void calcValueGradient(ScalarAR coords, Scalar value, ScalarA gradient) { }
+        virtual PetscScalar calcValue(ScalarAR coords) { return 0.0; }
+        virtual void calcGradient(ScalarAR coords, ScalarA gradient) { }
         virtual void calcHessian(ScalarAR coords, ScalarA hessian/*, ScalarA precon*/) { }
         virtual void calcEqs(ScalarAR coords, ScalarA result) { }
         virtual void calcIeqs(ScalarAR coords, ScalarA result) { }
@@ -690,14 +699,13 @@ namespace la
             {
                 auto x = Vector::readArray(coords);
                 auto c = Vector::getArray(grad);
-                auto fn = std::shared_ptr<PetscScalar>(new PetscScalar{});
 
-                calcValueGradient(x, fn, c);
-                *f = PetscRealPart(*fn);
+                *f = PetscRealPart(calcValue(x));
+                calcGradient(x, c);
 
                 return ierr;
             }), this));
-            //if ((void*)(&TaoContext::calcHessian) != (void*)(this->*(&TaoContext::calcHessian)))
+            if ((void*)(&OptimizerContext::calcHessian) != (void*)(this->*(&OptimizerContext::calcHessian)))
                 E(TaoSetHessianRoutine(tao, hessian, hessian, cify([this](Tao tao, Vec coords, Mat hes, Mat precon, void* self)
                 {
                     auto x = Vector::readArray(coords);
@@ -715,64 +723,70 @@ namespace la
 
                     return ierr;
                 }), this));
-            //if ((void*)(&TaoContext::calcEqs) != (void*)(this->*(&TaoContext::calcEqs)))
-                E(TaoSetEqualityConstraintsRoutine(tao, eqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
-                {
-                    auto x = Vector::readArray(coords);
-                    auto c = Vector::getArray(result);
+            if (eqConstraintCount > 0)
+            {
+                if ((void*)(&OptimizerContext::calcEqs) != (void*)(this->*(&OptimizerContext::calcEqs)))
+                    E(TaoSetEqualityConstraintsRoutine(tao, eqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
+                    {
+                        auto x = Vector::readArray(coords);
+                        auto c = Vector::getArray(result);
 
-                    calcEqs(x, c);
+                        calcEqs(x, c);
 
-                    return ierr;
-                }), this));
-            //if ((void*)(&TaoContext::calcIeqs) != (void*)(this->*(&TaoContext::calcIeqs)))
-                E(TaoSetInequalityConstraintsRoutine(tao, ieqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
-                {
-                    auto x = Vector::readArray(coords);
-                    auto c = Vector::getArray(result);
+                        return ierr;
+                    }), this));
+                if ((void*)(&OptimizerContext::calcEqJacobian) != (void*)(this->*(&OptimizerContext::calcEqJacobian)))
+                    E(TaoSetJacobianEqualityRoutine(tao, eqJacobian, eqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
+                    {
+                        auto x = Vector::readArray(coords);
+                        auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[eqConstraintCount * degreesOfFreedom]{});
 
-                    calcIeqs(x, c);
+                        calcEqJacobian(x, vals);
 
-                    return ierr;
-                }), this));
-            //if ((void*)(&TaoContext::calcEqJacobian) != (void*)(this->*(&TaoContext::calcEqJacobian)))
-                E(TaoSetJacobianEqualityRoutine(tao, eqJacobian, eqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
-                {
-                    auto x = Vector::readArray(coords);
-                    auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[eqConstraintCount * degreesOfFreedom]{});
+                        int count = std::max(degreesOfFreedom, eqConstraintCount);
+                        PetscInt range[count];
+                        for (int i = 0; i < count; ++i)
+                            range[i] = i;
 
-                    calcEqJacobian(x, vals);
+                        E(MatSetValues(jacobian, eqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
 
-                    int count = std::max(degreesOfFreedom, eqConstraintCount);
-                    PetscInt range[count];
-                    for (int i = 0; i < count; ++i)
-                        range[i] = i;
+                        Matrix::assemble(jacobian);
+                        
+                        return ierr;
+                    }), this));
+            }
+            if (ieqConstraintCount > 0)
+            {
+                if ((void*)(&OptimizerContext::calcIeqs) != (void*)(this->*(&OptimizerContext::calcIeqs)))
+                    E(TaoSetInequalityConstraintsRoutine(tao, ieqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
+                    {
+                        auto x = Vector::readArray(coords);
+                        auto c = Vector::getArray(result);
 
-                    E(MatSetValues(jacobian, eqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
+                        calcIeqs(x, c);
 
-                    Matrix::assemble(jacobian);
-                    
-                    return ierr;
-                }), this));
-            //if ((void*)(&TaoContext::calcIeqJacobian) != (void*)(this->*(&TaoContext::calcIeqJacobian)))
-                E(TaoSetJacobianInequalityRoutine(tao, ieqJacobian, ieqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
-                {
-                    auto x = Vector::readArray(coords);
-                    auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[ieqConstraintCount * degreesOfFreedom]{});
+                        return ierr;
+                    }), this));
+                if ((void*)(&OptimizerContext::calcIeqJacobian) != (void*)(this->*(&OptimizerContext::calcIeqJacobian)))
+                    E(TaoSetJacobianInequalityRoutine(tao, ieqJacobian, ieqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
+                    {
+                        auto x = Vector::readArray(coords);
+                        auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[ieqConstraintCount * degreesOfFreedom]{});
 
-                    calcIeqJacobian(x, vals);
+                        calcIeqJacobian(x, vals);
 
-                    int count = std::max(degreesOfFreedom, ieqConstraintCount);
-                    PetscInt range[count];
-                    for (int i = 0; i < count; ++i)
-                        range[i] = i;
+                        int count = std::max(degreesOfFreedom, ieqConstraintCount);
+                        PetscInt range[count];
+                        for (int i = 0; i < count; ++i)
+                            range[i] = i;
 
-                    E(MatSetValues(jacobian, ieqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
+                        E(MatSetValues(jacobian, ieqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
 
-                    Matrix::assemble(jacobian);
-                    
-                    return ierr;
-                }), this));
+                        Matrix::assemble(jacobian);
+                        
+                        return ierr;
+                    }), this));
+            }
             E(TaoSetFromOptions(tao));
         }
 
