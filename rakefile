@@ -17,6 +17,7 @@ CFLAGS = %W{
 	-Wno-unknown-pragmas
 	-Wwrite-strings
 	-Wno-strict-aliasing
+	-Wno-pmf-conversions
 
 	-O3
 }
@@ -141,7 +142,7 @@ end
 
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
-	PCH_FILES.each { |f| Rake::Task[f].invoke }
+	#PCH_FILES.each { |f| Rake::Task[f].invoke }
 	#unless uptodate?(OUT, [*OBJECT_FILES, *PCH_FILES])
 		sh "#{CXX} -H #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
 	#end
@@ -182,4 +183,4 @@ end
 DEPEND_FILES.each { |dep| import dep }
 DEPEND_FILES.each { |dep| file dep }
 
-PCH_FILES.each { |f| file f }
+#PCH_FILES.each { |f| file f }

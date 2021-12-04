@@ -5,11 +5,15 @@
 #include <functional>
 
 #include <petsc.h>
+#include <petsctao.h>
 #include <slepceps.h>
 
 static PetscErrorCode ierr;
 #define E(X) do { ierr = (X); if (PetscUnlikely(ierr)) { PetscError(PETSC_COMM_SELF,__LINE__,PETSC_FUNCTION_NAME,__FILE__,ierr,PETSC_ERROR_REPEAT," "); throw ierr; } } while(0)
 #define PRINT(format, ...) E(PetscPrintf(PETSC_COMM_WORLD, format "\n", ##__VA_ARGS__))
+#define PRINTL(format, ...) E(PetscPrintf(PETSC_COMM_SELF, format "\n", ##__VA_ARGS__))
+
+#define SQ(X) ((X) * (X))
 
 enum DIM
 {
@@ -20,6 +24,10 @@ enum DIM
 
 namespace la
 {
+    typedef std::shared_ptr<PetscScalar> Scalar;
+    typedef std::shared_ptr<PetscScalar[]> ScalarA;
+    typedef std::shared_ptr<const PetscScalar[]> ScalarAR;
+
     template<typename T>
     T option(const std::string& name, const T deflt);
     template<>
@@ -43,6 +51,7 @@ namespace la
         PetscOptionsGetReal(NULL, NULL, name.c_str(), &result, NULL);
         return result;
     }
+#if PETSC_USE_COMPLEX
     template<>
     PetscScalar option(const std::string& name, const PetscScalar deflt)
     {
@@ -50,6 +59,7 @@ namespace la
         PetscOptionsGetScalar(NULL, NULL, name.c_str(), &result, NULL);
         return result;
     }
+#endif
     template<>
     DMBoundaryType option(const std::string& name, const DMBoundaryType deflt)
     {
@@ -190,7 +200,7 @@ namespace la
             DMDALocalInfo info;
             E(DMDAGetLocalInfo(dm, &info));
             begin = { info.xs, 0, 0 };
-            end = { info.xs + info.mx, 1, 1 };
+            end = { info.xs + info.xm, 1, 1 };
         }
 
         Grid(const DMBoundaryType boundaryx, const DMBoundaryType boundaryy, const PetscInt countx, const PetscInt county, const PetscInt dof, const PetscInt stencil, const PetscReal minx, const PetscReal maxx, const PetscReal miny, const PetscReal maxy) :
@@ -203,7 +213,7 @@ namespace la
             DMDALocalInfo info;
             E(DMDAGetLocalInfo(dm, &info));
             begin = { info.xs, info.ys, 0 };
-            end = { info.xs + info.mx, info.ys + info.my, 1 };
+            end = { info.xs + info.xm, info.ys + info.ym, 1 };
         }
 
         Grid(const DMBoundaryType boundaryx, const DMBoundaryType boundaryy, const DMBoundaryType boundaryz, const PetscInt countx, const PetscInt county, const PetscInt countz, const PetscInt dof, const PetscInt stencil, const PetscReal minx, const PetscReal maxx, const PetscReal miny, const PetscReal maxy, const PetscReal minz, const PetscReal maxz) :
@@ -216,7 +226,7 @@ namespace la
             DMDALocalInfo info;
             E(DMDAGetLocalInfo(dm, &info));
             begin = { info.xs, info.ys, info.zs };
-            end = { info.xs + info.mx, info.ys + info.my, info.zs + info.mz };
+            end = { info.xs + info.xm, info.ys + info.ym, info.zs + info.zm };
         }
 
         std::shared_ptr<void> getPoints() const
@@ -247,11 +257,46 @@ namespace la
             E(DMCreateMatrix(grid->dm, &mat));
         }
 
+        Matrix(const PetscInt n, const PetscInt m, const PetscInt nonzero)
+        {
+            E(MatCreateSeqAIJ(PETSC_COMM_WORLD, n, m, nonzero, NULL, &mat));
+            E(MatSetFromOptions(mat));
+            E(MatSetUp(mat));
+        }
+
+        Matrix(const PetscInt n, const PetscInt m)
+        {
+            E(MatCreate(PETSC_COMM_WORLD, &mat));
+            E(MatSetSizes(mat, PETSC_DECIDE, PETSC_DECIDE, n, m));
+            E(MatSetFromOptions(mat));
+            //E(MatSetOption(mat, MAT_NEW_NONZERO_LOCATION_ERR, PETSC_FALSE));
+            E(MatSetUp(mat));
+        }
+
         ~Matrix()
         {
             ierr = MatDestroy(&mat);
         }
         
+        void setValue(const InsertMode insert, const PetscInt i, const PetscInt j, const PetscScalar x)
+        {
+            E(MatSetValue(mat, i, j, x, insert));
+        }
+
+        template<int n, int m>
+        void setValues(const InsertMode insert, const std::array<PetscScalar, n * m> values, const int i0=0, const int j0=0)
+        {
+            PetscInt rows[n];
+            for (int i = 0; i < n; ++i)
+                rows[i] = i0 + i;
+
+            PetscInt cols[m];
+            for (int j = 0; j < m; ++j)
+                cols[j] = j0 + j;
+
+            E(MatSetValues(mat, n, rows, m, cols, values.data(), insert));
+        }
+
         template<int D, int A, DIM I = X>
         constexpr void apply_cfd(const InsertMode insert, const PetscScalar scale = 1.0)
         {
@@ -273,7 +318,7 @@ namespace la
                     values[i] = coeff[i] * scale / pow(grid->step.z, D);
                 else
                     throw "unknown dimension";
-            
+
             for (k = grid->begin.z; k < grid->end.z; ++k)
                 for (j = grid->begin.y; j < grid->end.y; ++j)
                     for (i = grid->begin.x; i < grid->end.x; ++i)
@@ -312,10 +357,21 @@ namespace la
         void apply_diagonal(const InsertMode insert, const Potential2d&& func);
         void apply_diagonal(const InsertMode insert, const Potential3d&& func);
 
-        void assemble(const MatAssemblyType type)
+        void assemble(const MatAssemblyType type=MAT_FINAL_ASSEMBLY)
         {
             E(MatAssemblyBegin(mat, type));
             E(MatAssemblyEnd(mat, type));
+        }
+
+        static void assemble(Mat mat, const MatAssemblyType type=MAT_FINAL_ASSEMBLY)
+        {
+            E(MatAssemblyBegin(mat, type));
+            E(MatAssemblyEnd(mat, type));
+        }
+
+        operator Mat() noexcept
+        {
+            return mat;
         }
     };
 
@@ -329,27 +385,84 @@ namespace la
             E(DMCreateGlobalVector(grid->dm, &vec));
         }
 
+        Vector(PetscInt n)
+        {
+            //E(VecCreateSeq(PETSC_COMM_WORLD, n, &vec));
+            E(VecCreate(PETSC_COMM_WORLD, &vec));
+            E(VecSetSizes(vec, PETSC_DECIDE, n));
+            E(VecSetFromOptions(vec));
+        }
+
         void assemble()
         {
             E(VecAssemblyBegin(vec));
             E(VecAssemblyEnd(vec));
         }
 
-        std::shared_ptr<PetscScalar[]> getArray()
+        Triple<PetscInt> size() const 
+        {
+            if (grid == nullptr)
+            {
+                PetscInt size;
+                E(VecGetSize(vec, &size));
+                return size;   
+            }
+            else
+                return grid->size;
+        }
+
+        void setValue(const InsertMode insert, const PetscInt i, const PetscScalar x)
+        {
+            E(VecSetValue(vec, i, x, insert));
+        }
+
+        void setValues(PetscScalar x)
+        {
+            E(VecSet(vec, x));
+        }
+
+        static std::shared_ptr<PetscScalar[]> getArray(Vec vec)
         {
             PetscScalar* ptr;
             E(VecGetArray(vec, &ptr));
-            std::shared_ptr<PetscScalar[]> buffer(ptr, [this](PetscScalar* ptr)
+            std::shared_ptr<PetscScalar[]> buffer(ptr, [vec](PetscScalar* ptr)
             {
-                E(VecRestoreArray(this->vec, &ptr));
+                E(VecRestoreArray(vec, &ptr));
             });
 
             return buffer;
         }
 
+        std::shared_ptr<PetscScalar[]> getArray()
+        {
+            return getArray(vec);
+        }
+
+        static std::shared_ptr<const PetscScalar[]> readArray(Vec vec)
+        {
+            const PetscScalar* ptr;
+            E(VecGetArrayRead(vec, &ptr));
+            std::shared_ptr<const PetscScalar[]> buffer(ptr, [vec](const PetscScalar* ptr)
+            {
+                E(VecRestoreArrayRead(vec, &ptr));
+            });
+
+            return buffer;
+        }
+
+        std::shared_ptr<const PetscScalar[]> readArray()
+        {
+            return readArray(vec);
+        }
+
         ~Vector()
         {
             ierr = VecDestroy(&vec);
+        }
+
+        operator Vec() noexcept
+        {
+            return vec;
         }
     };
 
@@ -435,15 +548,19 @@ namespace la
 
     void Matrix::apply_diagonal(const InsertMode insert, const Potential1d&& func)
     {
-        Vector vec(grid);
         auto ptr = grid->getPoints();
-        PetscScalar* points = (PetscScalar*)ptr.get();;
-        for (int i = 0; i < grid->size; ++i)
-            E(VecSetValue(vec.vec, i, func(points[i].real()), INSERT_VALUES));
-        
-        vec.assemble();
+        PetscScalar* points = (PetscScalar*)ptr.get();
 
-        E(MatDiagonalSet(mat, vec.vec, insert));
+        PetscScalar v;
+        MatStencil row, col;
+        PetscInt i;
+        for (i = grid->begin.x; i < grid->end.x; ++i)
+        {
+            row.i = i;
+            col.i = i;
+            v = func(PetscRealPart(points[i]));
+            E(MatSetValuesStencil(mat, 1, &row, 1, &col, &v, insert));
+        }
     }
     void Matrix::apply_diagonal(const InsertMode insert, const Potential2d&& func)
     {
@@ -460,7 +577,7 @@ namespace la
                 row.j = j;
                 col.i = i;
                 col.j = j;
-                v = func(points[j][2 * i].real(), points[j][2 * i + 1].real());
+                v = func(PetscRealPart(points[j][2 * i]), PetscRealPart(points[j][2 * i + 1]));
                 E(MatSetValuesStencil(mat, 1, &row, 1, &col, &v, insert));
             }
     }
@@ -482,9 +599,216 @@ namespace la
                     col.i = i;
                     col.j = j;
                     col.k = k;
-                    v = func(points[k][j][3 * i].real(), points[k][j][3 * i + 1].real(), points[k][j][3 * i + 2].real());
+                    v = func(PetscRealPart(points[k][j][3 * i]), PetscRealPart(points[k][j][3 * i + 1]), PetscRealPart(points[k][j][3 * i + 2]));
                     E(MatSetValuesStencil(mat, 1, &row, 1, &col, &v, insert));
                 }
     }
 
+    template<typename F>
+    struct lambda_traits : lambda_traits<decltype(&F::operator())>
+    { };
+
+    template<typename F, typename R, typename...Args>
+    struct lambda_traits<R(F::*)(Args...)> : lambda_traits<R(F::*)(Args...) const>
+    { };
+
+    template<typename F, typename R, typename... Args>
+    struct lambda_traits<R(F::*)(Args...) const>
+    {
+        using pointer = typename std::add_pointer<R(Args...)>::type;
+
+        static pointer cify(F&& f)
+        {
+            static F fn = std::forward<F>(f);
+            return [](Args... args)
+            {
+                return fn(std::forward<Args>(args)...);
+            };
+        }
+    };
+
+    template<typename F>
+    inline typename lambda_traits<F>::pointer cify(F&& f)
+    {
+        return lambda_traits<F>::cify(std::forward<F>(f));
+    }
+
+    struct OptimizerContext
+    {
+        Tao tao;
+
+        PetscInt degreesOfFreedom;
+
+        Vector state;
+        Vector lowerBound;
+        Vector upperBound;
+
+        PetscInt eqConstraintCount;
+        PetscInt ieqConstraintCount;
+
+    private:
+        Vector eqState;
+        Vector ieqState;
+        Matrix eqJacobian;
+        Matrix ieqJacobian;
+        Matrix hessian;
+
+        bool check(void* a, void* b)
+        {
+            return a != b;
+        }
+
+    public:
+        // FIXME: virtual methods are not correctly called in constructor
+        virtual void initialize() { }
+        virtual void lateInitialize() { }
+        virtual void finalize() { }
+        virtual void calcValueGradient(ScalarAR coords, Scalar value, ScalarA gradient) { }
+        virtual void calcHessian(ScalarAR coords, ScalarA hessian/*, ScalarA precon*/) { }
+        virtual void calcEqs(ScalarAR coords, ScalarA result) { }
+        virtual void calcIeqs(ScalarAR coords, ScalarA result) { }
+        virtual void calcEqJacobian(ScalarAR coords, ScalarA jacobian/*, ScalarA precon*/) { }
+        virtual void calcIeqJacobian(ScalarAR coords, ScalarA jacobian/*, ScalarA precon*/) { }
+
+        OptimizerContext(const TaoType type, const PetscInt dof, const PetscInt eqCount=0, const PetscInt ieqCount=0) :
+            degreesOfFreedom(dof), state(dof), lowerBound(dof), upperBound(dof),
+            eqConstraintCount(eqCount), ieqConstraintCount(ieqCount), 
+            eqState(eqCount), ieqState(ieqCount),
+            eqJacobian(eqCount, dof), ieqJacobian(ieqCount, dof),
+            hessian(dof, dof)
+        {
+            E(TaoCreate(PETSC_COMM_WORLD, &tao));
+            E(TaoSetType(tao, type));
+        }
+        
+        void setup()
+        {
+            initialize();
+            E(TaoSetInitialVector(tao, state));
+            E(TaoSetVariableBounds(tao, lowerBound, upperBound));
+            E(TaoSetObjectiveAndGradientRoutine(tao, cify([this](Tao tao, Vec coords, PetscReal* f, Vec grad, void* self)
+            {
+                auto x = Vector::readArray(coords);
+                auto c = Vector::getArray(grad);
+                auto fn = std::shared_ptr<PetscScalar>(new PetscScalar{});
+
+                calcValueGradient(x, fn, c);
+                *f = PetscRealPart(*fn);
+
+                return ierr;
+            }), this));
+            //if ((void*)(&TaoContext::calcHessian) != (void*)(this->*(&TaoContext::calcHessian)))
+                E(TaoSetHessianRoutine(tao, hessian, hessian, cify([this](Tao tao, Vec coords, Mat hes, Mat precon, void* self)
+                {
+                    auto x = Vector::readArray(coords);
+                    auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[degreesOfFreedom * degreesOfFreedom]{});
+                    
+                    calcHessian(x, vals);
+                    
+                    PetscInt range[degreesOfFreedom];
+                    for (int i = 0; i < degreesOfFreedom; ++i)
+                        range[i] = i;
+                        
+                    E(MatSetValues(hes, degreesOfFreedom, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
+
+                    Matrix::assemble(hes);
+
+                    return ierr;
+                }), this));
+            //if ((void*)(&TaoContext::calcEqs) != (void*)(this->*(&TaoContext::calcEqs)))
+                E(TaoSetEqualityConstraintsRoutine(tao, eqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
+                {
+                    auto x = Vector::readArray(coords);
+                    auto c = Vector::getArray(result);
+
+                    calcEqs(x, c);
+
+                    return ierr;
+                }), this));
+            //if ((void*)(&TaoContext::calcIeqs) != (void*)(this->*(&TaoContext::calcIeqs)))
+                E(TaoSetInequalityConstraintsRoutine(tao, ieqState, cify([this](Tao tao, Vec coords, Vec result, void* self)
+                {
+                    auto x = Vector::readArray(coords);
+                    auto c = Vector::getArray(result);
+
+                    calcIeqs(x, c);
+
+                    return ierr;
+                }), this));
+            //if ((void*)(&TaoContext::calcEqJacobian) != (void*)(this->*(&TaoContext::calcEqJacobian)))
+                E(TaoSetJacobianEqualityRoutine(tao, eqJacobian, eqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
+                {
+                    auto x = Vector::readArray(coords);
+                    auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[eqConstraintCount * degreesOfFreedom]{});
+
+                    calcEqJacobian(x, vals);
+
+                    int count = std::max(degreesOfFreedom, eqConstraintCount);
+                    PetscInt range[count];
+                    for (int i = 0; i < count; ++i)
+                        range[i] = i;
+
+                    E(MatSetValues(jacobian, eqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
+
+                    Matrix::assemble(jacobian);
+                    
+                    return ierr;
+                }), this));
+            //if ((void*)(&TaoContext::calcIeqJacobian) != (void*)(this->*(&TaoContext::calcIeqJacobian)))
+                E(TaoSetJacobianInequalityRoutine(tao, ieqJacobian, ieqJacobian, cify([this](Tao tao, Vec coords, Mat jacobian, Mat precon, void* self)
+                {
+                    auto x = Vector::readArray(coords);
+                    auto vals = std::shared_ptr<PetscScalar[]>(new PetscScalar[ieqConstraintCount * degreesOfFreedom]{});
+
+                    calcIeqJacobian(x, vals);
+
+                    int count = std::max(degreesOfFreedom, ieqConstraintCount);
+                    PetscInt range[count];
+                    for (int i = 0; i < count; ++i)
+                        range[i] = i;
+
+                    E(MatSetValues(jacobian, ieqConstraintCount, range, degreesOfFreedom, range, vals.get(), INSERT_VALUES));
+
+                    Matrix::assemble(jacobian);
+                    
+                    return ierr;
+                }), this));
+            E(TaoSetFromOptions(tao));
+        }
+
+        ~OptimizerContext()
+        {
+            finalize();
+            TaoDestroy(&tao);
+        }
+
+        void configureSolvers(KSPType ksp, PCType pc, MatSolverType solver)
+        {
+            KSP _ksp;
+            PC _pc;
+            E(TaoGetKSP(tao, &_ksp));
+            E(KSPGetPC(_ksp, &_pc));
+            E(PCSetType(_pc, pc));
+            E(PCFactorSetMatSolverType(_pc, solver));
+            E(KSPSetType(_ksp, ksp));
+            E(KSPSetFromOptions(_ksp));
+        }
+
+        void configureTolerance(PetscReal norm, PetscReal relNorm, PetscReal progNorm, PetscInt iter)
+        {
+            E(TaoSetTolerances(tao, norm, relNorm, progNorm));
+            E(TaoSetMaximumIterations(tao, iter));
+            E(TaoSetMaximumFunctionEvaluations(tao, iter));
+        }
+
+        TaoConvergedReason solve()
+        {
+            lateInitialize();
+            E(TaoSolve(tao));
+
+            TaoConvergedReason reason;
+            E(TaoGetConvergedReason(tao, &reason));
+            return reason;
+        }
+    };
 }
