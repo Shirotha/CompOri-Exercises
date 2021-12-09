@@ -143,9 +143,9 @@ end
 desc "Compile the program"
 task :build => OBJECT_FILES do |t|
 	#PCH_FILES.each { |f| Rake::Task[f].invoke }
-	#unless uptodate?(OUT, [*OBJECT_FILES, *PCH_FILES])
+	unless uptodate?(OUT, OBJECT_FILES)
 		sh "#{CXX} -H #{CFLAGS.join(?\s)} #{OBJECT_FILES} -o #{OUT} #{LFLAGS.join(?\s)}"
-	#end
+	end
 end
 
 rule ".o" => ".c" do |t|
