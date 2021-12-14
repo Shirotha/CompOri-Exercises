@@ -4,6 +4,7 @@
 namespace plt = sciplot;
 #include "../common/la.hpp"
 #include "lagrange_lerp.hpp"
+#include "lagrange_hermite.hpp"
 
 
 struct AppCtx : la::OptimizerContext
@@ -131,7 +132,7 @@ struct LLGravityCtx : LagrangeLerpContext<N>
 {
     const PetscReal gravity = 9.81;
 
-    LLGravityCtx() : LagrangeLerpContext<N>(1.0, {0.0, 1.0}, {10.0, 0.0})
+    LLGravityCtx() : LagrangeLerpContext<N>(1.0, {0.0, 2.0}, {10.0, 0.0})
     { }
 
     PetscScalar calcPotential() 
@@ -150,10 +151,38 @@ struct LLGravityCtx : LagrangeLerpContext<N>
 
     void calcPotentialGradient(la::ScalarA g)
     {
-        
-        for (int i = 0; i < N; ++i)
+        for (int i = 0; i < N - 1; ++i)
             g[i + N - 1] += this->mass * gravity;
-        
+    }
+};
+
+template<int N, int M>
+struct LHGravityCtx : LagrangeHermiteContext<N, M>
+{
+    const PetscReal gravity = 9.81;
+
+    LHGravityCtx() : LagrangeHermiteContext<N, M>(1.0, {0.0, 5.0}, {10.0, 0.0})
+    { }
+
+    PetscScalar calcPotential() 
+    {
+        PetscScalar s{}; 
+
+        for (int i = 0; i < N; ++i)
+        {
+            s += this->qys[i] - this->qys[i + 1] 
+               + 6 * (this->ys[i] + this->ys[i + 1]);
+        }
+
+        s *= 0.5 * this->sixth * this->mass * gravity;
+
+        return s;
+    }
+
+    void calcPotentialGradient(la::ScalarA g)
+    {
+        for (int i = 0; i < N - 1; ++i)
+            g[i + N - 1] += this->mass * gravity;
     }
 };
 
@@ -183,7 +212,7 @@ void solve()
 }
 
 template<typename T>
-void plotL(T ctx)
+void plotLL(T ctx)
 {
     plt::Plot plot;
     plot.size(1200, 600);
@@ -196,7 +225,71 @@ void plotL(T ctx)
     plt::Vec xs(ctx.xs, ctx.n + 1);
     plt::Vec ys(ctx.ys, ctx.n + 1);
 
-    plot.drawCurveWithPoints(xs, ys);
+    plot.drawCurve(xs, ys);
+
+    plot.drawPoints(xs, ys);
+
+    /*
+    plt::Vec x2s = plt::linspace(0, 10, 100);
+    plt::Vec y2s(x2s.size());
+    for (size_t i = 0; i < y2s.size(); ++i)
+        y2s[i] = 5 - 0.05 * SQ(x2s[i]);
+
+    plot.drawCurve(x2s, y2s);
+    */
+    plot.show();
+}
+
+template<int N, int M>
+void plotLH(LagrangeHermiteContext<N, M> ctx)
+{
+    plt::Plot plot;
+    plot.size(1200, 600);
+
+    plot.xlabel("x");
+    plot.ylabel("y");
+
+    plot.legend().show(false);
+
+    plt::Vec xs(ctx.xs, N + 1);
+    plt::Vec ys(ctx.ys, N + 1);
+
+    plt::Vec qxs(ctx.qxs, N + 1);
+    plt::Vec qys(ctx.qys, N + 1);
+
+    plt::Vec dxs(3 * (N + 1));
+    plt::Vec dys(3 * (N + 1));
+
+    plt::Vec hxs(N * M);
+    plt::Vec hys(N * M);
+    
+    int j;
+    for (int i = 0; i < N; ++i)
+        for (j = 0; j < M; ++j)
+        {
+            hxs[M * i + j] = ctx.sampleX(i, j);
+            hys[M * i + j] = ctx.sampleY(i, j);
+        }
+
+    for (int i = 0; i < ctx.n + 1; ++i)
+    {
+        PRINT("%i: (%9E, %9E), (%9E, %9E), %9E", i, xs[i], ys[i], qxs[i], qys[i], ctx.d2[i]);
+
+        dxs[3 * i] = xs[i];
+        dxs[3 * i + 1] = xs[i] + qxs[i];
+        dxs[3 * i + 2] = NAN;
+        dys[3 * i] = ys[i];
+        dys[3 * i + 1] = ys[i] + qys[i];
+        dys[3 * i + 2] = NAN;
+    }
+
+    plot.drawCurve(hxs, hys);
+
+    // FIXME: somehow is scaleed wrong and breakes tics
+    //plot.drawBrokenCurve(dxs, dys);
+
+    plot.drawPoints(xs, ys);
+
     /*
     plt::Vec x2s = plt::linspace(0, 10, 100);
     plt::Vec y2s(x2s.size());
@@ -213,10 +306,12 @@ int main(int argc, char** argv)
     E(PetscInitialize(&argc, &argv, NULL, NULL));
     {
         LLGravityCtx<100> ctx;
+        // LHGravityCtx<10, 100> ctx;
 
         ctx.solve();
 
-        plotL(ctx);
+        plotLL(ctx);
+        // plotLH(ctx);
     }
     E(PetscFinalize()); 
 

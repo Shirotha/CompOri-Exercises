@@ -37,10 +37,9 @@ struct LagrangeLerpContext : la::OptimizerContext
 
         PetscInt is[N - 1];
         for (i = 0; i < N - 1; ++i)
-            is[i] = i + 1;
+            is[i] = i;
 
         E(VecSetValues(state, N - 1, is, xs + 1, INSERT_VALUES));
-        
         for (i = 0; i < N - 1; ++i)
             is[i] += N - 1;
 
