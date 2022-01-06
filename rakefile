@@ -18,9 +18,13 @@ CFLAGS = %W{
 	-Wwrite-strings
 	-Wno-strict-aliasing
 	-Wno-pmf-conversions
-
-	-O3
 }
+if PETSC_ARCH.include?("debug")
+	CFLAGS << "-O1" 
+else
+	CFLAGS << "-O3" 
+end
+
 LFLAGS = %W{
 	-Wl,-rpath,#{SLEPC_DIR}/#{PETSC_ARCH}/lib
 	-L#{SLEPC_DIR}/#{PETSC_ARCH}/lib
@@ -111,6 +115,7 @@ HEADER_FILES = Rake::FileList[File.join(DIR, "*.hpp"), CCOMMON.map { |i| File.jo
 PCH_FILES = HEADER_FILES.ext ".hpp.pch"
 OBJECT_FILES = SOURCE_FILES.ext ".o"
 DEPEND_FILES = SOURCE_FILES.ext ".mf"
+LINKED_FILES = OBJECT_FILES.union HEADER_FILES
 
 task :default => [:build, :run]
 
@@ -151,7 +156,7 @@ end
 rule ".o" => ".c" do |t|
 	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
-
+# FIXME: seems to ignore the *.mf files
 rule ".o" => ".cpp" do |t|
 	sh "#{CXX} #{CFLAGS.join(?\s)} #{CINCLUDE.map { |i| " -I#{i}"}.join} -c #{t.source} -o #{t.name}"
 end
@@ -180,7 +185,7 @@ rule ".mf" => ".cpp" do |t|
 	end
 end
 
-DEPEND_FILES.each { |dep| import dep }
 DEPEND_FILES.each { |dep| file dep }
+DEPEND_FILES.each { |dep| import dep }
 
 #PCH_FILES.each { |f| file f }

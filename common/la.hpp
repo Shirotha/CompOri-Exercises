@@ -6,6 +6,7 @@
 
 #include <petsc.h>
 #include <petsctao.h>
+#include <petscts.h>
 #include <slepceps.h>
 
 static PetscErrorCode ierr;
@@ -27,6 +28,9 @@ namespace la
     typedef std::shared_ptr<PetscScalar> Scalar;
     typedef std::shared_ptr<PetscScalar[]> ScalarA;
     typedef std::shared_ptr<const PetscScalar[]> ScalarAR;
+
+    typedef std::shared_ptr<void> GridPoints;
+    typedef std::shared_ptr<const void> GridPointsR;
 
     template<typename T>
     T option(const std::string& name, const T deflt);
@@ -91,6 +95,26 @@ namespace la
     } 
 
     template<typename T>
+    T ipow(const T value, int exp)
+    {
+        if (exp == 0)
+            return (T)1;
+
+        bool invert = exp < 0;
+        if (invert)
+            exp = -exp;
+
+        T result = (T)1;
+        while (--exp > 0)
+            result *= value;
+
+        if (invert)
+            return 1 / result;
+        else
+            return result;
+    }
+
+    template<typename T>
     struct Triple
     {
         T x{};
@@ -105,6 +129,48 @@ namespace la
         operator T() noexcept
         {
             return x;
+        }
+
+        Triple<T>& operator+= (const Triple<T> rhs)
+        {
+            x += rhs.x;
+            y += rhs.y;
+            z += rhs.z;
+            return *this;
+        }
+
+        friend Triple<T> operator+ (Triple<T> lhs, const Triple<T> rhs)
+        {
+            lhs += rhs;
+            return lhs;
+        }
+
+        Triple<T>& operator-= (const Triple<T> rhs)
+        {
+            x -= rhs.x;
+            y -= rhs.y;
+            z -= rhs.z;
+            return *this;
+        }
+
+        friend Triple<T> operator- (Triple<T> lhs, const Triple<T> rhs)
+        {
+            lhs -= rhs;
+            return lhs;
+        }
+
+        Triple<T>& operator*= (const T rhs)
+        {
+            x *= rhs;
+            y *= rhs;
+            z *= rhs;
+            return *this;
+        }
+
+        friend Triple<T> operator* (Triple<T> lhs, const T rhs)
+        {
+            lhs *= rhs;
+            return lhs;
         }
     };
 
@@ -229,7 +295,7 @@ namespace la
             end = { info.xs + info.xm, info.ys + info.ym, info.zs + info.zm };
         }
 
-        std::shared_ptr<void> getPoints() const
+        GridPoints getPoints() const
         {
             void* ptr;
             E(DMDAGetCoordinateArray(dm, &ptr));
@@ -244,6 +310,11 @@ namespace la
         ~Grid()
         {
             ierr = DMDestroy(&dm);
+        }
+
+        operator DM() noexcept
+        {
+            return dm;
         }
     };
 
@@ -317,11 +388,11 @@ namespace la
             
             for (i = 0; i < n; ++i)
                 if constexpr(I == X)
-                    values[i] = coeff[i] * scale / pow(grid->step.x, D);
+                    values[i] = coeff[i] * scale / ipow(grid->step.x, D);
                 else if constexpr(I == Y)
-                    values[i] = coeff[i] * scale / pow(grid->step.y, D);
+                    values[i] = coeff[i] * scale / ipow(grid->step.y, D);
                 else if constexpr(I == Z)
-                    values[i] = coeff[i] * scale / pow(grid->step.z, D);
+                    values[i] = coeff[i] * scale / ipow(grid->step.z, D);
                 else
                     throw "unknown dimension";
 
@@ -429,7 +500,7 @@ namespace la
             E(VecSet(vec, x));
         }
 
-        static std::shared_ptr<PetscScalar[]> getArray(Vec vec)
+        static ScalarA getArray(Vec vec)
         {
             PetscScalar* ptr;
             E(VecGetArray(vec, &ptr));
@@ -441,12 +512,56 @@ namespace la
             return buffer;
         }
 
-        std::shared_ptr<PetscScalar[]> getArray()
+        ScalarA getArray()
         {
             return getArray(vec);
         }
 
-        static std::shared_ptr<const PetscScalar[]> readArray(Vec vec)
+        static GridPoints getArrayLocal(Vec vec)
+        {
+            DM dm;
+            Vec local;
+            void* ptr;
+            E(VecGetDM(vec, &dm));
+            E(DMGetLocalVector(dm, &local));
+            E(DMGlobalToLocal(dm, vec, INSERT_VALUES, local));
+            E(DMDAVecGetArrayDOF(dm, local, &ptr));
+            std::shared_ptr<void> buffer(ptr, [dm, vec, local](void* ptr)
+            {
+                E(DMDAVecRestoreArrayDOF(dm, local, &ptr));
+                E(DMLocalToGlobal(dm, local, INSERT_VALUES, vec));
+                // NOTE: apparently DMDAVecRestoreArrayDOF clears the vector already
+                // E(DMRestoreLocalVector(dm, local_ptr));
+            });
+
+            return buffer;
+        }
+
+        GridPoints getArrayLocal()
+        {
+            return getArrayLocal(vec);
+        }
+
+        static GridPoints getArrayGlobal(Vec vec)
+        {
+            DM dm;
+            void* ptr;
+            E(VecGetDM(vec, &dm));
+            E(DMDAVecGetArrayDOF(dm, vec, &ptr));
+            std::shared_ptr<void> buffer(ptr, [dm, vec](void* ptr)
+            {
+                E(DMDAVecRestoreArrayDOF(dm, vec, &ptr));
+            });
+
+            return buffer;
+        }
+
+        GridPoints getArrayGlobal()
+        {
+            return getArrayGlobal(vec);
+        }
+        
+        static ScalarAR readArray(Vec vec)
         {
             const PetscScalar* ptr;
             E(VecGetArrayRead(vec, &ptr));
@@ -458,9 +573,52 @@ namespace la
             return buffer;
         }
 
-        std::shared_ptr<const PetscScalar[]> readArray()
+        std::shared_ptr<const PetscScalar[]> readArray() const
         {
             return readArray(vec);
+        }
+
+        static GridPointsR readArrayLocal(Vec vec)
+        {
+            DM dm;
+            Vec local;
+            const void* ptr;
+            E(VecGetDM(vec, &dm));
+            E(DMGetLocalVector(dm, &local));
+            E(DMGlobalToLocal(dm, vec, INSERT_VALUES, local));
+            E(DMDAVecGetArrayDOFRead(dm, local, &ptr));
+            std::shared_ptr<const void> buffer(ptr, [dm, local](const void* ptr)
+            {
+                E(DMDAVecRestoreArrayDOFRead(dm, local, &ptr));
+                // NOTE: apparently DMDAVecRestoreArrayDOF clears the vector already
+                // E(DMRestoreLocalVector(dm, local));
+            });
+
+            return buffer;
+        }
+
+        GridPointsR readArrayLocal()
+        {
+            return readArrayLocal(vec);
+        }
+
+        static GridPointsR readArrayGlobal(Vec vec)
+        {
+            DM dm;
+            const void* ptr;
+            E(VecGetDM(vec, &dm));
+            E(DMDAVecGetArrayDOFRead(dm, vec, &ptr));
+            std::shared_ptr<const void> buffer(ptr, [dm, vec](const void* ptr)
+            {
+                E(DMDAVecRestoreArrayDOFRead(dm, vec, &ptr));
+            });
+
+            return buffer;
+        }
+
+        GridPointsR readArrayGlobal()
+        {
+            return readArrayGlobal(vec);
         }
 
         ~Vector()
@@ -471,6 +629,79 @@ namespace la
         operator Vec() noexcept
         {
             return vec;
+        }
+        
+        template<int N>
+        constexpr static const PetscScalar readPoint(GridPointsR x, Triple<PetscInt> i, PetscInt dof)
+        {
+            static_assert(N > 0 && N < 4);
+
+            const void* tmp = x.get();
+            if constexpr(N == 1)
+            {
+                if (dof < 0)
+                    return ((const PetscScalar*)tmp)[i.x];
+                else
+                    return ((const PetscScalar**)tmp)[i.x][dof];
+            }
+
+            tmp = *((const void**)tmp + sizeof(PetscScalar*) * i.x);
+            if constexpr(N == 2)
+            {
+                if (dof < 0)
+                    return ((const PetscScalar*)tmp)[i.y];
+                else
+                    return ((const PetscScalar**)tmp)[i.y][dof];
+            }
+
+            tmp = *((const void**)tmp + sizeof(PetscScalar*) * i.y);
+            if constexpr(N == 3)
+            {
+                if (dof < 0)
+                    return ((const PetscScalar*)tmp)[i.z];
+                else
+                    return ((const PetscScalar**)tmp)[i.z][dof];
+            }
+        };
+
+        template<int N, int D, int A, DIM I = X>
+        constexpr static PetscScalar cfd_coeff(GridPointsR in, const Triple<PetscInt> center, const Triple<PetscReal> step, const PetscInt dof = -1, const PetscScalar scale = 1.0)
+        {
+            static_assert(N > 0 && N < 4);
+
+            constexpr PetscInt n = (D + 3) / 2 + A / 2;
+            constexpr PetscInt mi = n / 2;
+            
+            constexpr auto coeff = la::cfd<D, A>();
+            
+            Triple<PetscInt> di{0, 0, 0};
+            if constexpr(I == X)
+                di.x = 1;
+            else if constexpr(I == Y)
+                di.y = 1;
+            else if constexpr(I == Z)
+                di.z = 1;
+            else
+                throw "unknown dimension";
+            
+            PetscScalar r=0;
+            Triple<PetscInt> j = center - di * mi;
+            for (int i = 0; i < n; ++i)
+            {
+                r += coeff[i] * readPoint<N>(in, j, dof);
+                j += di;
+            }
+
+            if constexpr(I == X)
+                r *= scale / ipow(step.x, D);
+            else if constexpr(I == Y)
+                r *= scale / ipow(step.y, D);
+            else if constexpr(I == Z)
+                r *= scale / ipow(step.z, D);
+            else
+                throw "unknown dimension";
+
+            return r;
         }
     };
 
@@ -823,6 +1054,88 @@ namespace la
             TaoConvergedReason reason;
             E(TaoGetConvergedReason(tao, &reason));
             return reason;
+        }
+    };
+
+    struct DynamicsContext
+    {
+        ::TS ts;
+
+        Vector state;
+
+        virtual void initialCondition(void* x) { }
+        virtual void monitor(PetscInt step, PetscReal time, GridPointsR x) { }
+        virtual void calcRHS(PetscReal time, GridPointsR x, GridPoints y) { }
+
+        DynamicsContext(std::shared_ptr<Grid> grid, TSType type, TSProblemType problem) : state(grid)
+        {
+            E(TSCreate(PETSC_COMM_WORLD, &ts));
+            E(TSSetType(ts, type));
+            E(TSSetProblemType(ts, problem));
+            E(TSSetDM(ts, grid->dm));
+        }
+
+        void setup(PetscReal time, PetscReal deltaTime, TSExactFinalTimeOption final)
+        {
+            E(TSSetMaxTime(ts, time));
+            E(TSSetTimeStep(ts, deltaTime));
+            E(TSSetExactFinalTime(ts, final));
+            {
+                Vec local;
+                void* x;
+                DMGetLocalVector(state.grid->dm, &local);
+                DMGlobalToLocal(state.grid->dm, state, INSERT_VALUES, local);
+                DMDAVecGetArrayDOF(state.grid->dm, local, &x);
+
+                //auto x = state.getArrayLocal();
+                initialCondition(x);
+
+                DMDAVecRestoreArrayDOF(state.grid->dm, local, &x);
+                DMLocalToGlobal(state.grid->dm, local, INSERT_VALUES, state);
+                DMRestoreLocalVector(state.grid->dm, &local);
+            }
+            E(TSSetSolution(ts, state));
+            {
+                Vec local;
+                const void* x;
+                DMGetLocalVector(state.grid->dm, &local);
+                DMGlobalToLocal(state.grid->dm, state, INSERT_VALUES, local);
+                DMDAVecGetArrayDOFRead(state.grid->dm, local, &x);
+                
+                const PetscScalar** xs = (const PetscScalar**)x;
+
+                PRINT("%9E", xs[50][0]);
+
+                DMDAVecRestoreArrayDOFRead(state.grid->dm, local, &x);
+                DMRestoreLocalVector(state.grid->dm, &local);
+            }
+
+            if ((void*)(&DynamicsContext::monitor) != (void*)(this->*(&DynamicsContext::monitor)))
+                E(TSMonitorSet(ts, cify([this](TS ts, PetscInt step, PetscReal time, Vec state, void* ctx)
+                {
+                    auto x = Vector::readArrayGlobal(state);
+
+                    monitor(step, time, x);
+
+                    return ierr;
+                }), this, NULL));
+            if ((void*)(&DynamicsContext::calcRHS) != (void*)(this->*(&DynamicsContext::calcRHS)))
+                E(TSSetRHSFunction(ts, NULL, cify([this](TS ts, PetscReal time, Vec state, Vec result, void* ctx)
+                {
+                    auto x = Vector::readArrayLocal(state);
+                    auto y = Vector::getArrayLocal(result);
+
+                    calcRHS(time, x, y);
+
+                    return ierr;
+                }), this));
+            E(TSSetFromOptions(ts));
+        }
+
+        void solve()
+        {
+            E(TSSolve(ts, state));
+            E(TSGetSolution(ts, &state.vec));
         }
     };
 }
