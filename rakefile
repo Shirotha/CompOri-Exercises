@@ -20,7 +20,7 @@ CFLAGS = %W{
 	-Wno-pmf-conversions
 }
 if PETSC_ARCH.include?("debug")
-	CFLAGS << "-O1" 
+	CFLAGS << "-O0" 
 else
 	CFLAGS << "-O3" 
 end
@@ -79,7 +79,7 @@ LFLAGS = %W{
 	-lstdc++
 	-ldl
 	
-
+	-lncurses
 }
 CCOMMON = %W{
 	common

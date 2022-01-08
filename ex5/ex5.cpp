@@ -5,47 +5,10 @@
 #include <petsc.h>
 #include <petscts.h>
 
+#include "../common/tp.hpp"
+
 #define E(X) ierr = X; CHKERRQ(ierr);
 #define SQ(X) ((X) * (X))
-
-constexpr PetscInt lerp(const PetscInt a, const PetscInt b, const PetscReal x)
-{
-    return a + (PetscInt)PetscFloorReal(x * (b - a));
-}
-
-constexpr PetscReal unlerp(const PetscReal a, const PetscReal b, const PetscReal x)
-{
-    return (x - a) / (b - a);
-}
-
-constexpr PetscInt remap(const PetscReal a1, const PetscReal b1, const PetscInt a2, const PetscInt b2, const PetscReal x1)
-{
-    return lerp(a2, b2, unlerp(a1, b1, x1));
-}
-
-constexpr PetscInt ThreeWayCompare(const PetscInt a, const PetscInt b)
-{
-    if (a < b)
-        return -1;
-    if (a > b)
-        return 1;
-    return 0;
-}
-
-PetscInt BalancedTernaryConvert(const std::vector<PetscInt> digits)
-{
-    if (digits.size() == 0)
-        return 0;
-
-    PetscInt result = 0;
-    PetscInt p = 1;
-    for (auto d = digits.begin(); d < digits.end(); ++d)
-    {
-        result += p * *d;
-        p *= 3;
-    }
-    return result;
-}
 
 struct TSDMContext
 {
@@ -134,21 +97,16 @@ struct FHNDiffContext : TSDMContext
 
     FHNDiffContext(DM dm, PetscReal maxTime) : TSDMContext(dm), MaxTime(maxTime)
     { 
+        PetscOptionsGetReal(NULL, NULL, "-fhn_alpha", &alpha, NULL);
+        PetscOptionsGetReal(NULL, NULL, "-fhn_gamma", &gamma, NULL);
+        PetscOptionsGetReal(NULL, NULL, "-fhn_iApp", &iApp, NULL);
+        PetscOptionsGetReal(NULL, NULL, "-fhn_epsilon", &epsilon, NULL);
+        PetscOptionsGetReal(NULL, NULL, "-fhn_diffusion", &diffusion, NULL);
+
         PetscOptionsGetInt(NULL, NULL, "-monitor_width", &WIDTH, NULL);
         PetscOptionsGetInt(NULL, NULL, "-monitor_height", &HEIGHT, NULL);
         PetscOptionsGetInt(NULL, NULL, "-monitor_frames", &FRAMES, NULL);
-        monitor_buffer = new PetscReal[WIDTH];
-        monitor_coords = new PetscInt[WIDTH];
-
-        monitor_stream.setf(monitor_stream.scientific, monitor_stream.floatfield);
-        
-        // TODO: set parameters from options
-    }
-
-    ~FHNDiffContext()
-    {
-        delete[] monitor_buffer;
-        delete[] monitor_coords;
+        PetscOptionsGetReal(NULL, NULL, "-monitor_delay", &DELAY, NULL);
     }
 
     PetscErrorCode InitialState(void* state)
@@ -194,18 +152,15 @@ struct FHNDiffContext : TSDMContext
     }
 
     int WIDTH = 100;
-    int HEIGHT = 6;
-    int FRAMES = 10;
+    int HEIGHT = 10;
+    int FRAMES = 100;
+    PetscReal DELAY = 0.1;
+
     int current_frame = 0;
-
-    PetscReal* monitor_buffer;
-    PetscInt* monitor_coords;
-
-    std::stringstream monitor_stream;
 
     PetscErrorCode Monitor(PetscInt step, PetscReal time, const void* state)
     {
-        if (time < current_frame * MaxTime / FRAMES)
+        if (FRAMES && time < current_frame * MaxTime / (FRAMES - 1))
             return 0;
 
         ++current_frame;
@@ -216,83 +171,23 @@ struct FHNDiffContext : TSDMContext
 
         PetscInt begin = this->localInfo.xs;
         PetscInt end = begin + this->localInfo.xm;
-        PetscInt center = (begin + end) / 2;
 
-        /*
-        E(PetscPrintf(PETSC_COMM_WORLD, "v(0.5, %9E) = %9E\n", time, x[center][0]))
-        */
-
-        PetscInt stepsize = (end - begin) / WIDTH;
-        if (stepsize <= 0)
-            stepsize = 1;
-
-        PetscReal current, min = PETSC_MAX_REAL, max = PETSC_MIN_REAL;
-        for (PetscInt iData = center % stepsize, iBuffer = 0; iData < end; iData += stepsize, ++iBuffer)
-        {
-            current = PetscRealPart(x[iData][0]);
-            if (current < min)
-                min = current;
-            if (current > max)
-                max = current;
-
-#ifdef PETSC_DEBUG
-            if (iBuffer >= WIDTH)
-                throw "out of range";
-#endif
-
-            monitor_buffer[iBuffer] = current;
-        }
+        std::stringstream stream;
         
-        PetscInt i;
-        for (i = 0; i < WIDTH; ++i)
-            monitor_coords[i] = remap(min, max, 0, HEIGHT - 1, monitor_buffer[i]);
+        stream << tp::prepare(WIDTH, HEIGHT + 1, " ");
+        stream << tp::move(0, 1);
+        stream << tp::drawCurve(tp::DetailedTheme, WIDTH, HEIGHT, x, begin, end, 0, 1);
+        stream << tp::move(-WIDTH, -HEIGHT - 2);
+        
+        E(PetscPrintf(PETSC_COMM_WORLD, stream.str().c_str()))
 
-        monitor_stream << max << '\n';
-        for (PetscInt j = HEIGHT - 1; j >= 0; --j)
-        {
-            for (i = 0; i < WIDTH; ++i)
-                if (monitor_coords[i] == j)
-                    switch (BalancedTernaryConvert({
-                        ThreeWayCompare(i == WIDTH - 1 ? 0 : monitor_coords[i + 1], monitor_coords[i]),
-                        ThreeWayCompare(monitor_coords[i], i == 0 ? 0 : monitor_coords[i - 1])
-                        }))
-                    {
-                        case -4:
-                        case -1:
-                            monitor_stream << '\\';
-                            break;
-                        case -2:
-                            monitor_stream << 'v';
-                            break;
-                        case -3:
-                        case  1:
-                            // TODO: change to '_' at one row higher (or subdivide into _- and _ in upper row) need generalized balanced ternary for different sized steps (/\ for large steps and . for small steps) (use half steps) (| for very steep steps, for smaller steps ,')
-                            monitor_stream << '-';
-                            break;
-                        case  0:
-                            monitor_stream << '-';
-                            break;
-                        case  2:
-                            monitor_stream << '^';
-                            break;
-                        case  3:
-                        case  4:
-                            monitor_stream << '/';
-                            break;
-                    }
-                else
-                    monitor_stream << ' ';
+        if (DELAY > PETSC_MACHINE_EPSILON)
+            E(PetscSleep(DELAY))
 
-            monitor_stream << '\n';
-        }
-        monitor_stream << min << '\n';
-
-        PetscPrintf(PETSC_COMM_WORLD, monitor_stream.str().c_str());
-
-        monitor_stream.str("");
         return ierr;
     }
 };
+
 
 int main(int argv, char** argc)
 {
@@ -307,8 +202,8 @@ int main(int argv, char** argc)
         E(DMSetUp(dm))
         E(DMDASetUniformCoordinates(dm, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0))
         {
-            PetscReal maxTime = 1.0;
-            PetscInt steps = 10000;
+            PetscReal maxTime = 1.5;
+            PetscInt steps = 1 << 17;
 
             E(PetscOptionsGetReal(NULL, NULL, "-time", &maxTime, NULL))
             E(PetscOptionsGetInt(NULL, NULL, "-steps", &steps, NULL))
