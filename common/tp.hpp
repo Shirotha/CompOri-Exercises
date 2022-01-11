@@ -60,7 +60,66 @@ namespace tp
                 return PetscFloorReal(x); 
             });
     }
-    // TODO: use second dataset for colors
+    
+    std::string clear(const PetscInt width, const PetscInt height, const std::string clear="")
+    {
+        std::stringstream stream;
+        stream << "\e[s";
+        
+        for (PetscInt i = 0; i <= height; ++i)
+        {
+            if (clear.size() > 0)
+                for (PetscInt j = 0; j < width; ++j)
+                    stream << clear;
+
+            stream << '\n';
+        }
+
+        stream << "\e[u";
+
+        return stream.str();
+    }
+
+    std::string move(const PetscInt x, PetscInt y)
+    {
+        std::stringstream stream;
+        if (x)
+            stream << "\e[" << PetscAbs(x) << (x < 0 ? 'D' : 'C');
+        if (y)
+            stream << "\e[" << PetscAbs(y) << (y < 0 ? 'A' : 'B');
+
+        return stream.str();
+    }
+
+    std::string drawString(const std::string text, const PetscInt yOffset=0, const PetscInt xOffset=0)
+    {
+        std::stringstream stream;
+        if (xOffset || yOffset)
+            stream << "\e[s";
+
+        stream << move(xOffset, yOffset);
+        stream << text;
+
+        if (xOffset || yOffset)
+            stream << "\e[u";
+
+        return stream.str();
+    }
+
+    std::valarray<PetscReal> convertData(const PetscInt size, const PetscScalar** data, const PetscInt begin, const PetscInt end, const PetscInt dof=0)
+    {
+        PetscInt center = (end + begin) / 2;
+        PetscInt stepsize = (end - begin) / size;
+        if (stepsize == 0)
+            stepsize = PetscSign(end - begin);
+
+        std::valarray<PetscReal> buffer(size);
+        for (PetscInt iData = begin + (center % stepsize), iBuffer = 0; iData < end && iBuffer < size; iData += stepsize, ++iBuffer)
+            buffer[iBuffer] = PetscRealPart(data[iData][dof]);
+
+        return buffer;
+    }
+
     class Theme
     {
     public:
@@ -144,8 +203,10 @@ namespace tp
 
         std::string _color_data;
         std::valarray<PetscInt> _color_map;
+
+        std::string _overflow;
     public:
-        AdvancedTheme(const PetscInt base, const std::string* data, const PetscInt colors, const std::string* color_data) : _base(base), _maxValue(base >> 1)
+        AdvancedTheme(const PetscInt base, const std::string* data, const PetscInt colors, const std::string* color_data, const std::string overflow="") : _base(base), _maxValue(base >> 1), _overflow(overflow)
         {
             _indices.resize(base * base * 2, 0);
             for (size_t i = 0; i < _indices.size(); ++i)
@@ -180,6 +241,23 @@ namespace tp
             PetscInt i = gbt + ((_base * _base) >> 1) + (x % 2) * (_base * _base);
             auto is = slice(i);
             std::string result = _data.substr(is.start(), is.size());
+            if (_overflow.size() > 0)
+            {
+                PetscInt diff = 0;
+                if (l < r)
+                    diff = b - x;
+                if (l > r)
+                    diff = x - b;
+
+                if (diff > _maxValue)
+                {
+                    diff -= _maxValue;
+                    std::string step = move(-1, l > r ? 1 : -1);
+                    step = step.append(_overflow);
+                    while (diff-- > 0)
+                        result = result.append(step);
+                }
+            }
             return result;
         }
         std::string operator[](const PetscInt color) const
@@ -253,68 +331,9 @@ namespace tp
         "\e[1;38;2;228;99;45m",
         "\e[1;38;2;219;33;33m"
     };
-    const AdvancedTheme DetailedTheme(5, DetailedThemeData, 11, DetailedThemeColors);
+    const AdvancedTheme DetailedTheme(5, DetailedThemeData, 11, DetailedThemeColors/*, "▕"*/);
 
-    std::string prepare(const PetscInt width, const PetscInt height, const std::string clear="")
-    {
-        std::stringstream stream;
-        stream << "\e[s";
-        
-        for (PetscInt i = 0; i <= height; ++i)
-        {
-            if (clear.size() > 0)
-                for (PetscInt j = 0; j < width; ++j)
-                    stream << clear;
-
-            stream << '\n';
-        }
-
-        stream << "\e[u";
-
-        return stream.str();
-    }
-
-    std::string move(const PetscInt x, PetscInt y)
-    {
-        std::stringstream stream;
-        if (x)
-            stream << "\e[" << PetscAbs(x) << (x < 0 ? 'D' : 'C');
-        if (y)
-            stream << "\e[" << PetscAbs(y) << (y < 0 ? 'A' : 'B');
-
-        return stream.str();
-    }
-
-    std::string drawString(const std::string text, const PetscInt yOffset=0, const PetscInt xOffset=0)
-    {
-        std::stringstream stream;
-        if (xOffset || yOffset)
-            stream << "\e[s";
-
-        stream << move(xOffset, yOffset);
-        stream << text;
-
-        if (xOffset || yOffset)
-            stream << "\e[u";
-
-        return stream.str();
-    }
-
-    std::valarray<PetscReal> convertData(const PetscInt size, const PetscScalar** data, const PetscInt begin, const PetscInt end, const PetscInt dof=0)
-    {
-        PetscInt center = (end + begin) / 2;
-        PetscInt stepsize = (end - begin) / size;
-        if (stepsize == 0)
-            stepsize = PetscSign(end - begin);
-
-        std::valarray<PetscReal> buffer(size);
-        for (PetscInt iData = begin + (center % stepsize), iBuffer = 0; iData < end && iBuffer < size; iData += stepsize, ++iBuffer)
-            buffer[iBuffer] = PetscRealPart(data[iData][dof]);
-
-        return buffer;
-    }
-
-    std::string drawCurve(const Theme& theme, const PetscInt width, const PetscInt height, const PetscScalar** data, const PetscInt begin, const PetscInt end, const PetscInt dof=0, const PetscInt color_dof=-1, const PetscReal min=PETSC_NINFINITY, const PetscReal max=PETSC_INFINITY, const PetscInt leftBoundary=-1, const PetscInt rightBoundary=-1)
+    std::string drawCurve(const Theme& theme, const PetscInt width, const PetscInt height, const PetscScalar** data, const PetscInt begin, const PetscInt end, const PetscInt dof=0, const PetscInt color_dof=-1, const PetscReal min=PETSC_NINFINITY, const PetscReal max=PETSC_INFINITY, const PetscReal color_min=PETSC_NINFINITY, const PetscReal color_max=PETSC_INFINITY, const PetscInt leftBoundary=-1, const PetscInt rightBoundary=-1)
     {
         auto buffer = convertData(width, data, begin, end, dof);
         
@@ -328,7 +347,7 @@ namespace tp
         std::valarray<PetscInt> color_partitions;
         if (color_dof >= 0)
             // TODO: find better boundaries
-            color_partitions = partition(color_buffer, theme.colors(), min, max);
+            color_partitions = partition(color_buffer, theme.colors(), color_min, color_max);
         
         std::stringstream stream;
         

@@ -40,6 +40,8 @@ LFLAGS = %W{
 	-L/usr/lib/gcc/x86_64-linux-gnu/10
 	-lpetsc
 	
+	-lharminv
+
 	-lumfpack
 	-lklu
 	-lcholmod
