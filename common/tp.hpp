@@ -55,7 +55,7 @@ namespace tp
             remap(a, b,
                   0, partitions - 1,
                   data),
-            [](PetscReal x) -> PetscInt
+            [partitions](PetscReal x) -> PetscInt
             { 
                 return PetscFloorReal(x); 
             });
@@ -260,8 +260,13 @@ namespace tp
             }
             return result;
         }
-        std::string operator[](const PetscInt color) const
+        std::string operator[](PetscInt color) const
         {
+            if (color < 0)
+                color = 0;
+            if (color >= colors())
+                color = colors() - 1;
+
             auto is = color_slice(color);
             std::string result = _color_data.substr(is.start(), is.size());
             return result;
@@ -356,11 +361,12 @@ namespace tp
             if (color_dof >= 0)
                 stream << theme[color_partitions[i]];
 
-            stream << drawString(theme(
-                i == 0 ? (leftBoundary < 0 ? partitions[i] : leftBoundary) : partitions[i - 1],
-                partitions[i],
-                i == width - 1 ? (rightBoundary < 0 ? partitions[i] : rightBoundary) : partitions[i + 1]
-            ), height - partitions[i] / theme.subdivisions());
+            if (partitions[i] >= 0 && partitions[i] < count)
+                stream << drawString(theme(
+                    i == 0 ? (leftBoundary < 0 ? partitions[i] : leftBoundary) : partitions[i - 1],
+                    partitions[i],
+                    i == width - 1 ? (rightBoundary < 0 ? partitions[i] : rightBoundary) : partitions[i + 1]
+                ), height - partitions[i] / theme.subdivisions());
             stream << "\e[C";
         }
 
