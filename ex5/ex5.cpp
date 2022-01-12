@@ -190,10 +190,17 @@ struct FHNDiffContext : TSDMContext
         // NOTE: only with range 1.0
         PetscReal stepsize =  1.0 / this->localInfo.xm;
 
+        PetscInt iL, iR;
         for (PetscInt i = begin; i < end; ++i)
         {
+            iL = i - 1; iR = i + 1;
+            if (iL < begin)
+                iL += (end - begin);
+            if (iR >= end)
+                iR -= (end - begin);
+
             y[i][0] = (x[i][0] * (1 - x[i][0]) * (x[i][0] - alpha) - x[i][1] + iApp + 
-                diffusion * ((x[i + 1][0] - x[i - 1][0]) / (2 * stepsize))) / epsilon;
+                diffusion * ((x[iR][0] - x[iL][0]) / (2 * stepsize))) / epsilon;
             y[i][1] = x[i][0] - gamma * x[i][1];
         }
 
@@ -241,7 +248,7 @@ struct FHNSpectrumContext : TSContext
 {
     PetscReal alpha = 0.0;
     PetscReal gamma = 0.5;
-    PetscReal iApp = 0.5;
+    PetscReal iApp = 0.3;
     PetscReal epsilon = 0.01;
 
     PetscInt steps;
@@ -287,6 +294,9 @@ struct FHNSpectrumContext : TSContext
 
         x[0] = alpha + epsilon;
         x[1] = -epsilon;
+
+        PetscInt count = 2;
+        E(PetscOptionsGetScalarArray(NULL, NULL, "-fhn_init", x, &count, NULL))
 
         return ierr;
     }
@@ -338,7 +348,7 @@ struct FHNSpectrumContext : TSContext
 
         stream << tp::clear(WIDTH, HEIGHT + 1, " ");
         stream << tp::move(0, 1);
-        stream << tp::drawCurve(tp::DetailedTheme, width, HEIGHT, (const PetscScalar**)indexer, begin, end, 0, 1, -0.5, 1.0);
+        stream << tp::drawCurve(tp::DetailedTheme, width, HEIGHT, (const PetscScalar**)indexer, begin, end, 0, 1, -0.5, 1.0, 0.0, 0.5);
         stream << tp::move(-WIDTH - WIDTH, -HEIGHT - 2);
 
         E(PetscPrintf(PETSC_COMM_WORLD, stream.str().c_str()))
@@ -357,11 +367,8 @@ int main(int argv, char** argc)
     PetscBool spectrum = PETSC_FALSE;
     E(PetscOptionsGetBool(NULL, NULL, "-spectrum", &spectrum, NULL))
 
-    PetscReal maxTime = 1.5;
-    if (spectrum)
-        maxTime = 10;
-
-    PetscInt steps = 1 << 17;
+    PetscReal maxTime = 10;
+    PetscInt steps = 100000;
 
     E(PetscOptionsGetReal(NULL, NULL, "-time", &maxTime, NULL))
     E(PetscOptionsGetInt(NULL, NULL, "-steps", &steps, NULL))
@@ -417,10 +424,25 @@ int main(int argv, char** argc)
             PetscInt lastPeak = -1;
             PetscReal period = 0.0;
             PetscInt peaks = 0;
+
+            PetscReal uMin = PETSC_INFINITY, uMax = PETSC_NINFINITY;
+            PetscReal vMin = PETSC_INFINITY, vMax = PETSC_NINFINITY;
             for (int i = 0; i < steps; ++i)
             {
+                value = ctx.buffer[i].V;
+                real = PetscRealPart(value);
+                if (real < vMin)
+                    vMin = real;
+                if (real > vMax)
+                    vMax = real;
+
                 value = ctx.buffer[i].U;
                 real = PetscRealPart(value);
+                if (real < uMin)
+                    uMin = real;
+                if (real > uMax)
+                    uMax = real;
+
                 if (!peak && real > 0.7)
                 {
                     peak = PETSC_TRUE;
@@ -436,6 +458,9 @@ int main(int argv, char** argc)
 
                 signal[i] = value;
             }
+
+            E(PetscPrintf(PETSC_COMM_WORLD, "U in [%5E, %5E]; V in [%5E, %5E]\n", uMin, uMax, vMin, vMax))
+
             if (peaks > 0)
             {
                 period /= peaks;
@@ -512,11 +537,13 @@ int main(int argv, char** argc)
                     plot.size(1300, 650);
 
                     plot.xlabel("frequncy");
-                    plot.ylabel("amplitude");
+                    //plot.ylabel("amplitude");
 
+                    PetscReal minFreq = 0;
                     PetscReal maxFreq = maxFrequency / 2.0;
-                    E(PetscOptionsGetReal(NULL, NULL, "-spectrum_plot_range", &maxFreq, NULL))
-                    plot.xrange(-maxFreq, maxFreq);
+                    E(PetscOptionsGetReal(NULL, NULL, "-spectrum_plot_min", &minFreq, NULL))
+                    E(PetscOptionsGetReal(NULL, NULL, "-spectrum_plot_max", &maxFreq, NULL))
+                    plot.xrange(minFreq, maxFreq);
 
                     //plot.legend().show(false);
 
