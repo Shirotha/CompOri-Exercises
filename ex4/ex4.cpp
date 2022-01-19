@@ -2,318 +2,335 @@
 #include <sstream>
 #include <sciplot/sciplot.hpp>
 namespace plt = sciplot;
-#include "../common/la.hpp"
-#include "lagrange_lerp.hpp"
-#include "lagrange_hermite.hpp"
+#include <petsc.h>
+#include <petsctao.h>
 
+#define E(X) ierr = X; CHKERRQ(ierr);
+#define SQ(X) ((X) * (X))
 
-struct AppCtx : la::OptimizerContext
+struct PetscScalar2
 {
-    AppCtx() : la::OptimizerContext(TAOIPM, 2, 1, 2)
-    { 
-        setup();
+    PetscScalar x;
+    PetscScalar y;
+
+    static PetscScalar2 create(const PetscScalar x, const PetscScalar y)
+    {
+        return { x, y };
     }
 
-    void initialize()
+    constexpr PetscScalar norm2() const
     {
-        state.setValues(0.0);
-        lowerBound.setValues(-1.0);
-        upperBound.setValues(2.0);
+        return x * x + y * y;
     }
 
-    void lateInitialize()
+    constexpr PetscScalar2 operator+ (const PetscScalar2& rhs) const
     {
-        configureSolvers(KSPPREONLY, PCLU, MATSOLVERSUPERLU);
-        //configureTolerance(1e-10, 1e-10, 1e-10, 1000);
+        return {x + rhs.x, y + rhs.y};
     }
-
-    // f(x, y) = (x - 2)^2 + (y - 2)^2 - 2(x + y)
-    PetscScalar calcValue(la::ScalarAR x)
+    constexpr PetscScalar2 operator- (const PetscScalar2& rhs) const
     {
-        return SQ(x[0] - 2.0) + SQ(x[1] - 2.0) - 2.0 * (x[0] + x[1]);
+        return {x - rhs.x, y - rhs.y};
     }
-
-    // df = (2(x - 2) - 2) dx + (2(y - 2) - 2) dy
-    void calcGradient(la::ScalarAR x, la::ScalarA g)
+    constexpr PetscScalar2 operator* (const PetscScalar& rhs) const
     {
-        g[0] = 2.0 * (x[0] - 2.0) - 2.0;
-        g[1] = 2.0 * (x[1] - 2.0) - 2.0;
+        return {x * rhs, y * rhs};
     }
-    
-    void calcHessian(la::ScalarAR x, la::ScalarA h/*, ScalarA precon*/)
+    constexpr PetscScalar2 operator/ (const PetscScalar& rhs) const
     {
-        Vec dualEq;
-        Vec dualIeq;
-
-        E(TaoGetDualVariables(tao, &dualEq, &dualIeq));
-        auto de = la::Vector::readArray(dualEq);
-        auto di = la::Vector::readArray(dualIeq);
-
-        h[0] = 2.0 * (1 + de[0] + di[0] - di[1]);
-        h[3] = 2.0;
-    }
-    
-    // x^2 + y = 2
-    void calcEqs(la::ScalarAR x, la::ScalarA c)
-    {
-        c[0] = SQ(x[0]) + x[1] - 2.0;
-    }
-
-    // x^2 - 1 <= y <= x^2
-    void calcIeqs(la::ScalarAR x, la::ScalarA c)
-    {
-        c[0] = SQ(x[0]) - x[1];
-        c[1] = 1.0 - SQ(x[0]) + x[1];
-    }
-
-    void calcEqJacobian(la::ScalarAR x, la::ScalarA j/*, ScalarA precon*/)
-    {
-        j[0] = 2 * x[0];
-        j[1] = 1.0;
-    }
-
-    void calcIeqJacobian(la::ScalarAR x, la::ScalarA j/*, ScalarA precon*/)
-    {
-        j[0] = 2.0 * x[0];
-        j[1] = -1.0;
-        j[2] = -2.0 * x[0];
-        j[3] = 1.0;
+        return {x / rhs, y / rhs};
     }
 };
-
-struct SimpleCtx : la::OptimizerContext
+constexpr PetscScalar2 operator* (const PetscScalar& lhs, const PetscScalar2& rhs)
 {
-    SimpleCtx() : la::OptimizerContext(TAOLMVM, 1, 0, 0)
-    {
-        setup();
-    }
-
-    PetscScalar calcValue(la::ScalarAR x)
-    {
-        return SQ(x[0] - 1.0) - 1.0;
-    }
-
-    void calcGradient(la::ScalarAR x, la::ScalarA g)
-    {
-        g[0] = 2.0 * (x[0] - 1.0);
-    }
-};
-
-struct LJCtx : la::OptimizerContext
-{
-    PetscReal a = 1.0;
-    PetscReal b = 1.0;
-
-    LJCtx() : la::OptimizerContext(TAOBLMVM, 1, 0, 0)
-    {
-        setup();
-    }
-
-    void initialize()
-    {
-        state.setValues(100.0);
-        lowerBound.setValues(0.01);
-        upperBound.setValues(100.0);
-    }
-
-    PetscScalar calcValue(la::ScalarAR x)
-    {
-        return (a / (x[0]) - b) / x[0];
-    }
-
-    void calcGradient(la::ScalarAR x, la::ScalarA g)
-    {
-        g[0] = (b - 2 * a / x[0]) / (x[0] * x[0]);
-    }
-};
-
-template<int N>
-struct LLGravityCtx : LagrangeLerpContext<N>
-{
-    const PetscReal gravity = 9.81;
-
-    LLGravityCtx() : LagrangeLerpContext<N>(1.0, {0.0, 2.0}, {10.0, 0.0})
-    { }
-
-    PetscScalar calcPotential() 
-    {
-        PetscScalar s{}; 
-
-        for (int i = 0; i < N; ++i)
-        {
-            s += this->ys[i] + this->ys[i + 1];
-        }
-
-        s *= 0.5 * this->mass * gravity;
-
-        return s;
-    }
-
-    void calcPotentialGradient(la::ScalarA g)
-    {
-        for (int i = 0; i < N - 1; ++i)
-            g[i + N - 1] += this->mass * gravity;
-    }
-};
-
-template<int N, int M>
-struct LHGravityCtx : LagrangeHermiteContext<N, M>
-{
-    const PetscReal gravity = 9.81;
-
-    LHGravityCtx() : LagrangeHermiteContext<N, M>(1.0, {0.0, 5.0}, {10.0, 0.0})
-    { }
-
-    PetscScalar calcPotential() 
-    {
-        PetscScalar s{}; 
-
-        for (int i = 0; i < N; ++i)
-        {
-            s += this->qys[i] - this->qys[i + 1] 
-               + 6 * (this->ys[i] + this->ys[i + 1]);
-        }
-
-        s *= 0.5 * this->sixth * this->mass * gravity;
-
-        return s;
-    }
-
-    void calcPotentialGradient(la::ScalarA g)
-    {
-        for (int i = 0; i < N - 1; ++i)
-            g[i + N - 1] += this->mass * gravity;
-    }
-};
-
-template<typename T>
-void solve()
-{
-    T ctx;
-
-    auto reason = ctx.solve();
-
-    auto x = ctx.state.readArray();
-    auto n = ctx.state.size();
-
-    std::stringstream str;
-    str.setf(str.scientific, str.floatfield);
-
-    str << "f(";
-    for (int i = 0; i < n.x; ++i)
-    {
-        str << x[i];
-        if (i < n.x - 1)
-            str << ", ";
-    }
-
-    str << ") = " << ctx.calcValue(x) << " (" << TaoConvergedReasons[reason] << ")";
-    PRINT("%s", str.str().c_str());
+    return { lhs * rhs.x, lhs * rhs.y };
 }
 
-template<typename T>
-void plotLL(T ctx)
+constexpr PetscScalar2 min(const PetscScalar2& a, const PetscScalar2& b)
 {
+    return {
+        PetscRealPart(a.x - b.x) > 0 ? b.x : a.x,
+        PetscRealPart(a.y - b.y) > 0 ? b.y : a.y
+    };
+}
+
+constexpr PetscScalar2 max(const PetscScalar2& a, const PetscScalar2& b)
+{
+    return {
+        PetscRealPart(a.x - b.x) < 0 ? b.x : a.x,
+        PetscRealPart(a.y - b.y) < 0 ? b.y : a.y
+    };
+}
+
+constexpr PetscScalar2 lerp(const PetscScalar2 a, const PetscScalar2 b, PetscReal x)
+{
+    return a + (b - a) * x;
+}
+
+struct TAOContext
+{
+    virtual PetscErrorCode calc(const void* coords, PetscReal* f, PetscScalar* grad) const = 0;
+};
+
+PetscErrorCode TAO1ObjectiveAndGradientRountine(Tao tao, Vec coords, PetscReal* f, Vec grad, void* ptr)
+{
+    PetscErrorCode ierr = 0;
+
+    TAOContext* ctx = (TAOContext*)ptr;
+
+    const PetscScalar* coordsData;
+    PetscScalar* gradData;
+
+    PetscFunctionBegin;
+
+    E(VecGetArrayRead(coords, &coordsData))
+    E(VecGetArray(grad, &gradData))
+
+    E(ctx->calc(coordsData, f, gradData))
+
+    E(VecRestoreArray(grad, &gradData))
+    E(VecRestoreArrayRead(coords, &coordsData))
+
+    PetscFunctionReturn(ierr);
+}
+
+struct LagrangeLerpContext : public TAOContext
+{
+    PetscInt knots = 10;
+    PetscScalar2 begin = {0.0, 2.0};
+    PetscScalar2 end = {10.0, 0.0};
+    PetscReal mass = 1.0;
+
+    LagrangeLerpContext()
+    {
+        PetscOptionsGetInt(NULL, NULL, "-knots", &knots, NULL);
+        PetscOptionsGetReal(NULL, NULL, "-mass", &mass, NULL);
+
+        PetscInt max = 2;
+        PetscOptionsGetScalarArray(NULL, NULL, "-begin", &begin.x, &max, NULL);
+        max = 2;
+        PetscOptionsGetScalarArray(NULL, NULL, "-end", &end.x, &max, NULL);
+    }
+
+    virtual PetscScalar2 min() const
+    {
+        return ::min(begin, end) - PetscScalar2::create(10, 10);
+    }
+
+    virtual PetscScalar2 max() const
+    {
+        return ::max(begin, end) + PetscScalar2::create(10, 10);
+    }
+
+    PetscScalar2 get(const void* coords, const PetscInt i) const
+    {
+        const PetscScalar2 zero = { 0, 0 };
+        const PetscScalar* x = (const PetscScalar*)coords;
+        if (i < 0)
+            return i == -1 ? begin : zero;
+        if (i >= knots)
+            return i == knots ? end : zero;
+        
+        return { x[2 * i], x[2 * i + 1] };
+    }
+
+    void set(PetscScalar* grad, const PetscInt i, const PetscScalar2 value) const
+    {
+        if (i < 0 || i >= knots)
+            return;
+            
+        grad[2 * i] = value.x;
+        grad[2 * i + 1] = value.y;
+    }
+
+    void add(PetscScalar* grad, const PetscInt i, const PetscScalar2 value) const
+    {
+        if (i < 0 || i >= knots)
+            return;
+            
+        grad[2 * i] += value.x;
+        grad[2 * i + 1] += value.y;
+    }
+
+    virtual PetscErrorCode calc(const void* coords, PetscReal* f, PetscScalar* grad) const
+    {
+        PetscErrorCode ierr = 0;
+
+        *f = 0;
+        for (int i = -1; i <= knots; ++i)
+        {
+            *f += PetscRealPart((get(coords, i + 1) - get(coords, i)).norm2());
+        }
+        *f *= 0.5 * SQ(knots + 1) * mass;
+
+        for (int i = 0; i < knots; ++i)
+            set(grad, i, SQ(knots + 1) * mass * (2 * get(coords, i) - get(coords, i + 1) - get(coords, i - 1)));
+
+        return ierr;
+    }
+};
+
+// FIXME: line serach failure (gradient wrong?)
+struct LagrangeLerpGravityContext : public LagrangeLerpContext
+{
+    PetscReal gravity = 9.81;
+
+    LagrangeLerpGravityContext()
+    {
+        PetscOptionsGetReal(NULL, NULL, "-gravity", &gravity, NULL);
+    }
+
+    PetscErrorCode calc(const void* coords, PetscReal* f, PetscScalar* grad) const
+    {
+        PetscErrorCode ierr = 0;
+
+        LagrangeLerpContext::calc(coords, f, grad);
+
+        PetscReal s = 0;
+        for (int i = 0; i <= knots; ++i)
+            s += PetscRealPart(get(coords, i).y + get(coords, i + 1).y);
+
+        *f += 0.5 * this->mass * gravity * s;
+        
+        for (int i = 0; i < knots - 1; ++i)
+            add(grad, i, { 0, this->mass * gravity });
+
+        return ierr;
+    }
+};
+
+PetscErrorCode plot_curve(const LagrangeLerpContext& ctx, Vec coords)
+{
+    PetscErrorCode ierr = 0;
+
     plt::Plot plot;
-    plot.size(1200, 600);
+
+    plot.size(1300, 650);
 
     plot.xlabel("x");
     plot.ylabel("y");
 
     plot.legend().show(false);
 
-    plt::Vec xs(ctx.xs, ctx.n + 1);
-    plt::Vec ys(ctx.ys, ctx.n + 1);
+    plt::Vec xs(ctx.knots + 2);
+    plt::Vec ys(xs.size());
 
-    plot.drawCurve(xs, ys);
+    {
+        const PetscScalar* x;
 
-    plot.drawPoints(xs, ys);
+        E(VecGetArrayRead(coords, &x))
 
-    /*
-    plt::Vec x2s = plt::linspace(0, 10, 100);
-    plt::Vec y2s(x2s.size());
-    for (size_t i = 0; i < y2s.size(); ++i)
-        y2s[i] = 5 - 0.05 * SQ(x2s[i]);
-
-    plot.drawCurve(x2s, y2s);
-    */
-    plot.show();
-}
-
-template<int N, int M>
-void plotLH(LagrangeHermiteContext<N, M> ctx)
-{
-    plt::Plot plot;
-    plot.size(1200, 600);
-
-    plot.xlabel("x");
-    plot.ylabel("y");
-
-    plot.legend().show(false);
-
-    plt::Vec xs(ctx.xs, N + 1);
-    plt::Vec ys(ctx.ys, N + 1);
-
-    plt::Vec qxs(ctx.qxs, N + 1);
-    plt::Vec qys(ctx.qys, N + 1);
-
-    plt::Vec dxs(3 * (N + 1));
-    plt::Vec dys(3 * (N + 1));
-
-    plt::Vec hxs(N * M);
-    plt::Vec hys(N * M);
-    
-    int j;
-    for (int i = 0; i < N; ++i)
-        for (j = 0; j < M; ++j)
+        PetscScalar2 a;
+        for (PetscInt i = -1; i <= ctx.knots; ++i)
         {
-            hxs[M * i + j] = ctx.sampleX(i, j);
-            hys[M * i + j] = ctx.sampleY(i, j);
+            a = ctx.get(x, i);
+            xs[i + 1] = PetscRealPart(a.x);
+            ys[i + 1] = PetscRealPart(a.y);
         }
 
-    for (int i = 0; i < ctx.n + 1; ++i)
-    {
-        PRINT("%i: (%9E, %9E), (%9E, %9E), %9E", i, xs[i], ys[i], qxs[i], qys[i], ctx.d2[i]);
-
-        dxs[3 * i] = xs[i];
-        dxs[3 * i + 1] = xs[i] + qxs[i];
-        dxs[3 * i + 2] = NAN;
-        dys[3 * i] = ys[i];
-        dys[3 * i + 1] = ys[i] + qys[i];
-        dys[3 * i + 2] = NAN;
+        E(VecRestoreArrayRead(coords, &x))
     }
 
-    plot.drawCurve(hxs, hys);
+    plot.drawCurveWithPoints(xs, ys);
 
-    // FIXME: somehow is scaleed wrong and breakes tics
-    //plot.drawBrokenCurve(dxs, dys);
-
-    plot.drawPoints(xs, ys);
-
-    /*
-    plt::Vec x2s = plt::linspace(0, 10, 100);
-    plt::Vec y2s(x2s.size());
-    for (size_t i = 0; i < y2s.size(); ++i)
-        y2s[i] = 5 - 0.05 * SQ(x2s[i]);
-
-    plot.drawCurve(x2s, y2s);
-    */
     plot.show();
+
+    return ierr;
 }
 
-int main(int argc, char** argv)
+PetscErrorCode run_tao(LagrangeLerpContext& ctx)
 {
-    E(PetscInitialize(&argc, &argv, NULL, NULL));
+    PetscErrorCode ierr = 0;
+
+    Tao tao;
+    Vec coords, min, max;
+
     {
-        LLGravityCtx<100> ctx;
-        // LHGravityCtx<10, 100> ctx;
+        E(VecCreate(PETSC_COMM_WORLD, &coords))
+        E(VecSetType(coords, VECSEQ))
+        E(VecSetSizes(coords, PETSC_DECIDE, 2 * ctx.knots))
+        E(VecAssemblyBegin(coords))
+        E(VecAssemblyEnd(coords))
 
-        ctx.solve();
+        E(VecDuplicate(coords, &min))
+        E(VecDuplicate(coords, &max))
 
-        plotLL(ctx);
-        // plotLH(ctx);
+        {
+            PetscScalar* data, *minData, *maxData;
+
+            E(VecGetArray(coords, &data))
+            E(VecGetArray(min, &minData))
+            E(VecGetArray(max, &maxData))
+
+            PetscScalar2 knot, a = ctx.min(), b = ctx.max();
+            for (int i = 0; i < ctx.knots; ++i)
+            {
+                knot = lerp(ctx.begin, ctx.end, (i + 1) / (ctx.knots + 1.0));
+                data[2 * i] = knot.x;
+                data[2 * i + 1] = a.x;
+                minData[2 * i] = a.x;
+                minData[2 * i + 1] = a.y;
+                maxData[2 * i] = b.x;
+                maxData[2 * i + 1] = b.y;
+            }
+
+            E(VecRestoreArray(max, &maxData))
+            E(VecRestoreArray(min, &minData))
+            E(VecRestoreArray(coords, &data))
+        }
+
+        E(TaoCreate(PETSC_COMM_WORLD, &tao))
+        E(TaoSetType(tao, TAOLMVM))
+        E(TaoSetVariableBounds(tao, min, max))
+        E(TaoSetInitialVector(tao, coords))
+        E(TaoSetObjectiveAndGradientRoutine(tao, TAO1ObjectiveAndGradientRountine, &ctx))
+
+        PetscReal norm = 1e-10, relNorm = 1e-10, progNorm = 1e-10;
+        PetscInt iterations = 10000;
+
+        E(TaoSetTolerances(tao, norm, relNorm, progNorm))        
+        E(TaoSetMaximumIterations(tao, iterations))
+        E(TaoSetMaximumFunctionEvaluations(tao, iterations))
+        
+        E(TaoSetFromOptions(tao))
+
+        E(TaoSolve(tao))
+
+        PetscBool dump_points = PETSC_FALSE;        
+        E(PetscOptionsGetBool(NULL, NULL, "-dump_points", &dump_points, NULL))
+        if (dump_points)
+        {
+            const PetscScalar* data;
+
+            E(VecGetArrayRead(coords, &data))
+
+            PetscScalar2 x;
+            for (PetscInt i = -2; i <= ctx.knots + 1; ++i)
+            {
+                x = ctx.get(data, i);
+                E(PetscPrintf(PETSC_COMM_WORLD, "(%5E, %5E)\n", x.x, x.y))
+            }
+
+            E(VecRestoreArrayRead(coords, &data))
+        }
+
+        E(plot_curve(ctx, coords))
     }
-    E(PetscFinalize()); 
+    E(VecDestroy(&coords))
+    E(TaoDestroy(&tao))
+
+    return ierr;
+}
+
+int main(int argv, char** argc)
+{
+    PetscErrorCode ierr = 0;
+    E(PetscInitialize(&argv, &argc, NULL, NULL))
+
+    LagrangeLerpGravityContext ctx;
+
+    E(run_tao(ctx))
+
+    E(PetscFinalize())
 
     return ierr;
 }
