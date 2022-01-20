@@ -1,0 +1,46 @@
+require "rake/clean"
+require "erb"
+
+_, data = File.read(__FILE__).split(/^__END__$/, 2)
+
+File.write "makefile", ERB.new(data).result(binding)
+
+unless ENV["ENV_READY"]
+    sh "make"
+    exit
+end
+
+
+
+task :default => [:run]
+
+task :run => :build do
+    sh "./ex6"
+end
+
+desc "build program"
+CLOBBER << "ex6"
+task :build => "ex6.o" do
+    sh "#{ENV["CCCOM"]} #{ENV["CCFLAGS"]} ex6.o -o ex6 #{ENV["LIBFLAGS"]}"
+end
+
+CLEAN << "*.o"
+rule ".o" => ".cpp" do |t|
+    sh "#{ENV["CCCOM"]} -c #{ENV["CCFLAGS"]} -o #{t.name} #{t.source}"
+end
+
+__END__
+.EXPORT_ALL_VARIABLES:
+
+include /home/shiro/Work/CompOriTheoPhys/compori2122-master/itensor/options.mk
+
+OPTIMIZATIONS= -O3
+
+TENSOR_HEADERS=$(PREFIX)/itensor/all.h
+CCFLAGS= -I. $(ITENSOR_INCLUDEFLAGS) $(CPPFLAGS) $(OPTIMIZATIONS)
+CCGFLAGS= -I. $(ITENSOR_INCLUDEFLAGS) $(DEBUGFLAGS)
+LIBFLAGS=-L'$(ITENSOR_LIBDIR)' $(ITENSOR_LIBFLAGS)
+LIBGFLAGS=-L'$(ITENSOR_LIBDIR)' $(ITENSOR_LIBGFLAGS)
+
+default: 
+	rake ENV_READY=1 <%= $*.map { |arg| "'#{arg}'" }.join " " %>
