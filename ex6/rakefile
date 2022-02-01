@@ -21,13 +21,23 @@ end
 desc "build program"
 CLOBBER << "ex6"
 task :build => "ex6.o" do
-    sh "#{ENV["CCCOM"]} #{ENV["CCFLAGS"]} ex6.o -o ex6 #{ENV["LIBFLAGS"]}"
+    if ENV["DEBUG"]
+        sh "#{ENV["CCCOM"]} #{ENV["CCGFLAGS"]} ex6.o -o ex6 #{ENV["LIBGFLAGS"]}"
+    else
+        sh "#{ENV["CCCOM"]} #{ENV["CCFLAGS"]} ex6.o -o ex6 #{ENV["LIBFLAGS"]}"
+    end
 end
 
-CLEAN << "*.o"
+CLEAN << Rake::FileList["*.o"]
 rule ".o" => ".cpp" do |t|
-    sh "#{ENV["CCCOM"]} -c #{ENV["CCFLAGS"]} -o #{t.name} #{t.source}"
+    if ENV["DEBUG"]
+        sh "#{ENV["CCCOM"]} -c #{ENV["CCGFLAGS"]} -o #{t.name} #{t.source}"
+    else
+        sh "#{ENV["CCCOM"]} -c #{ENV["CCFLAGS"]} -o #{t.name} #{t.source}"
+    end
 end
+
+
 
 __END__
 .EXPORT_ALL_VARIABLES:
