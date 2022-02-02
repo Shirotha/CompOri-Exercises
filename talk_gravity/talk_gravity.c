@@ -16,14 +16,6 @@ s.t.         x1^2 + x2 = 2
 #include"hessfuncxy.h"
 #include"hessfuncyy.h"
 
-static PetscReal M=10;
-static PetscReal m=1;
-static PetscReal mu=0.1;
-
-static PetscReal x_0=-2.5;
-static PetscReal y_0=0.1;
-static PetscReal r=1.6;
-
 static    char help[]="";
 
 /*
@@ -51,6 +43,16 @@ typedef struct {
     Vec            x,xl,xu;
     Vec            ce,ci,bl,bu;
     Mat            Ae,Ai,H;
+
+    PetscReal M;
+    PetscReal m;
+    PetscReal mu;
+    PetscReal r;
+
+    PetscInt count;
+    PetscInt current;
+    PetscReal* x_0;
+    PetscReal* y_0;
 } AppCtx;
 
 /* -------- User-defined Routines --------- */
@@ -73,71 +75,123 @@ PetscErrorCode main(int argc,char **argv)
     //KSP                    ksp;
     //PC                     pc;
     AppCtx                 user;    /* application context */
-
+    
     ierr = PetscInitialize(&argc,&argv,(char *)0,help);CHKERRQ(ierr);
+
+    user.M = 10;
+    PetscOptionsGetReal(NULL, NULL, "-center_mass", &user.M, NULL);
+
+    user.m = 1;
+    PetscOptionsGetReal(NULL, NULL, "-outer_mass", &user.m, NULL);
+
+    user.mu = 0.1;
+    PetscOptionsGetReal(NULL, NULL, "-probe_mass", &user.mu, NULL);
+
+    user.r = 0.2;
+    PetscOptionsGetReal(NULL, NULL, "-search_radius", &user.r, NULL);
+
+    PetscReal xs[5];
+    PetscReal ys[5];
+    
+    user.count = 5;
+    xs[0] =  0.7; ys[0] =  0;
+    xs[1] =  1.3; ys[1] =  0;
+    xs[2] = -1;   ys[2] =  0;
+    xs[3] =  0.2; ys[3] =  1;
+    xs[4] =  0.2; ys[4] = -1;
+
+    {
+        PetscReal vals[10];
+        PetscInt count = 10;
+        PetscBool opt = PETSC_FALSE;
+        PetscOptionsGetRealArray(NULL, NULL, "-starting_points", vals, &count, &opt);
+        
+        if (opt)
+        {
+            for (int i = 0; i < count; ++i)
+                if (i % 2)
+                    ys[i >> 1] = vals[i];
+                else
+                    xs[i >> 1] = vals[i];
+
+            user.count = count >> 1;
+        }
+    }
+
     //ierr = PetscPrintf(PETSC_COMM_WORLD,"\n---- TOY Problem -----\n");CHKERRQ(ierr);
     //ierr = PetscPrintf(PETSC_COMM_WORLD,"Solution should be f(1,1)=-2\n");CHKERRQ(ierr);
-    ierr = InitializeProblem(&user);CHKERRQ(ierr);
-
-    //ierr = PetscSleep(10);CHKERRQ(ierr);
 
     ierr = TaoCreate(PETSC_COMM_WORLD,&tao);CHKERRQ(ierr);
     
-    //ierr = TaoSetType(tao,TAOPDIPM);CHKERRQ(ierr);
-    ierr = TaoSetType(tao,TAOIPM);CHKERRQ(ierr);
-    //ierr = TaoSetType(tao,TAOLMVM);CHKERRQ(ierr);
-    //ierr = TaoSetType(tao,TAOBLMVM);CHKERRQ(ierr);
-    
-    ierr = TaoSetInitialVector(tao,user.x);CHKERRQ(ierr);
-    ierr = TaoSetVariableBounds(tao,user.xl,user.xu);CHKERRQ(ierr);
-    ierr = TaoSetObjectiveAndGradientRoutine(tao,FormFunctionGradient,(void*)&user);CHKERRQ(ierr);
-    
-    ierr = TaoSetEqualityConstraintsRoutine(tao,user.ce,FormEqualityConstraints,(void*)&user);CHKERRQ(ierr);
-    ierr = TaoSetInequalityConstraintsRoutine(tao,user.ci,FormInequalityConstraints,(void*)&user);CHKERRQ(ierr);
-
-    ierr = TaoSetJacobianEqualityRoutine(tao,user.Ae,user.Ae,FormEqualityJacobian,(void*)&user);CHKERRQ(ierr);
-    ierr = TaoSetJacobianInequalityRoutine(tao,user.Ai,user.Ai,FormInequalityJacobian,(void*)&user);CHKERRQ(ierr);
-    ierr = TaoSetHessianRoutine(tao,user.H,user.H,FormHessian,(void*)&user);CHKERRQ(ierr);
-    //ierr = TaoSetTolerances(tao,0,0,0);CHKERRQ(ierr);
-    
-    ierr = TaoSetMaximumIterations(tao, 10000);CHKERRQ(ierr);
-    ierr = TaoSetMaximumFunctionEvaluations(tao, 10000);CHKERRQ(ierr);
-    
+    for (user.current = 0; user.current < user.count; ++user.current)
     {
-        KSP ksp;
-        PC pc;
+        user.x_0 = xs + user.current;
+        user.y_0 = ys + user.current;
 
-        ierr = TaoGetKSP(tao, &ksp);CHKERRQ(ierr);
-        ierr = KSPGetPC(ksp, &pc);CHKERRQ(ierr);
-        ierr = PCSetType(pc, PCSVD);CHKERRQ(ierr);
+        PetscPrintf(PETSC_COMM_WORLD, "starting at (%f, %f)\n", *user.x_0, *user.y_0);
+
+        ierr = InitializeProblem(&user);CHKERRQ(ierr);
+
+        //ierr = PetscSleep(10);CHKERRQ(ierr);
+
+        
+        //ierr = TaoSetType(tao,TAOPDIPM);CHKERRQ(ierr);
+        ierr = TaoSetType(tao,TAOIPM);CHKERRQ(ierr);
+        //ierr = TaoSetType(tao,TAOLMVM);CHKERRQ(ierr);
+        //ierr = TaoSetType(tao,TAOBLMVM);CHKERRQ(ierr);
+        
+        ierr = TaoSetInitialVector(tao,user.x);CHKERRQ(ierr);
+        ierr = TaoSetVariableBounds(tao,user.xl,user.xu);CHKERRQ(ierr);
+        ierr = TaoSetObjectiveAndGradientRoutine(tao,FormFunctionGradient,(void*)&user);CHKERRQ(ierr);
+        
+        ierr = TaoSetEqualityConstraintsRoutine(tao,user.ce,FormEqualityConstraints,(void*)&user);CHKERRQ(ierr);
+        ierr = TaoSetInequalityConstraintsRoutine(tao,user.ci,FormInequalityConstraints,(void*)&user);CHKERRQ(ierr);
+
+        ierr = TaoSetJacobianEqualityRoutine(tao,user.Ae,user.Ae,FormEqualityJacobian,(void*)&user);CHKERRQ(ierr);
+        ierr = TaoSetJacobianInequalityRoutine(tao,user.Ai,user.Ai,FormInequalityJacobian,(void*)&user);CHKERRQ(ierr);
+        ierr = TaoSetHessianRoutine(tao,user.H,user.H,FormHessian,(void*)&user);CHKERRQ(ierr);
+        //ierr = TaoSetTolerances(tao,0,0,0);CHKERRQ(ierr);
+        
+        ierr = TaoSetMaximumIterations(tao, 10000);CHKERRQ(ierr);
+        ierr = TaoSetMaximumFunctionEvaluations(tao, 10000);CHKERRQ(ierr);
+        
+        {
+            KSP ksp;
+            PC pc;
+
+            ierr = TaoGetKSP(tao, &ksp);CHKERRQ(ierr);
+            ierr = KSPGetPC(ksp, &pc);CHKERRQ(ierr);
+            ierr = PCSetType(pc, PCSVD);CHKERRQ(ierr);
+        }
+
+        ierr = TaoSetFromOptions(tao);CHKERRQ(ierr);
+            /*
+        ierr = TaoGetKSP(tao,&ksp);CHKERRQ(ierr);
+        ierr = KSPGetPC(ksp,&pc);CHKERRQ(ierr);
+        ierr = PCSetType(pc,PCLU);CHKERRQ(ierr);
+        
+                //This algorithm produces matrices with zeros along the diagonal therefore we need to use
+            //SuperLU which does partial pivoting
+
+        ierr = PCFactorSetMatSolverType(pc,MATSOLVERSUPERLU);CHKERRQ(ierr);
+        ierr = KSPSetType(ksp,KSPPREONLY);CHKERRQ(ierr);
+        ierr = KSPSetFromOptions(ksp);CHKERRQ(ierr);
+
+        //ierr = TaoSetTolerances(tao,0,0,0);CHKERRQ(ierr); */
+        ierr = TaoSolve(tao);CHKERRQ(ierr);
+        
+        const PetscScalar *x;
+
+        ierr = VecGetArrayRead(user.x,&x);CHKERRQ(ierr);
+        
+        double tempvar=function(user.M, user.m, user.mu, x[0], x[1]);
+        
+        ierr = PetscPrintf(PETSC_COMM_WORLD,"Min at x=%.16f\ty=%.16f\nValue at minimum %.16f\n",x[0], x[1], tempvar);CHKERRQ(ierr);
+        ierr = VecRestoreArrayRead(user.x, &x);
+            
+        ierr = DestroyProblem(&user);CHKERRQ(ierr);
     }
 
-    ierr = TaoSetFromOptions(tao);CHKERRQ(ierr);
-        /*
-    ierr = TaoGetKSP(tao,&ksp);CHKERRQ(ierr);
-    ierr = KSPGetPC(ksp,&pc);CHKERRQ(ierr);
-    ierr = PCSetType(pc,PCLU);CHKERRQ(ierr);
-    
-            //This algorithm produces matrices with zeros along the diagonal therefore we need to use
-        //SuperLU which does partial pivoting
-
-    ierr = PCFactorSetMatSolverType(pc,MATSOLVERSUPERLU);CHKERRQ(ierr);
-    ierr = KSPSetType(ksp,KSPPREONLY);CHKERRQ(ierr);
-    ierr = KSPSetFromOptions(ksp);CHKERRQ(ierr);
-
-    //ierr = TaoSetTolerances(tao,0,0,0);CHKERRQ(ierr); */
-    ierr = TaoSolve(tao);CHKERRQ(ierr);
-    
-    const PetscScalar *x;
-
-    ierr = VecGetArrayRead(user.x,&x);CHKERRQ(ierr);
-    
-    double tempvar=function(M, m, mu, x[0], x[1]);
-    
-    ierr = PetscPrintf(PETSC_COMM_WORLD,"Min at x=%.16f\ty=%.16f\nValue at minimum %.16f\n",x[0], x[1], tempvar);CHKERRQ(ierr);
-    ierr = VecRestoreArrayRead(user.x, &x);
-        
-    ierr = DestroyProblem(&user);CHKERRQ(ierr);
     ierr = TaoDestroy(&tao);CHKERRQ(ierr);
     ierr = PetscFinalize();
     return ierr;
@@ -154,8 +208,8 @@ PetscErrorCode InitializeProblem(AppCtx *user)//Initialisierung für Speicher
     ierr = VecDuplicate(user->x,&user->xu);CHKERRQ(ierr);
     //ierr = VecSet(user->x,0.0);CHKERRQ(ierr);                   // <----------
     
-    ierr = VecSetValue(user->x, 0, x_0, INSERT_VALUES);CHKERRQ(ierr);
-    ierr = VecSetValue(user->x, 1, y_0, INSERT_VALUES);CHKERRQ(ierr);
+    ierr = VecSetValue(user->x, 0, *user->x_0, INSERT_VALUES);CHKERRQ(ierr);
+    ierr = VecSetValue(user->x, 1, *user->y_0, INSERT_VALUES);CHKERRQ(ierr);
     
     ierr = VecAssemblyBegin(user->x);CHKERRQ(ierr);
     ierr = VecAssemblyEnd(user->x);CHKERRQ(ierr);
@@ -210,6 +264,8 @@ PetscErrorCode DestroyProblem(AppCtx *user)//Freiheit für Speicher!!!
 
 PetscErrorCode FormFunctionGradient(Tao tao, Vec X, PetscReal *f, Vec G, void *ctx)
 {
+    AppCtx *user=(AppCtx*)ctx;
+
     PetscScalar *g;
     const PetscScalar *x;
     PetscErrorCode ierr;
@@ -219,11 +275,11 @@ PetscErrorCode FormFunctionGradient(Tao tao, Vec X, PetscReal *f, Vec G, void *c
         //VecGetArray[Read]() lockt Zugriff aus speicher
     ierr = VecGetArray(G,&g);CHKERRQ(ierr);
     
-    *f=function(M, m, mu, x[0], x[1]);
+    *f=function(user->M, user->m, user->mu, x[0], x[1]);
         //Funktion, von der das Minimum bestimmt werden soll
     
-    g[0]=gradfuncx(M, m, mu, x[0], x[1]);    //x-Komponente des Gradienten
-    g[1]=gradfuncy(M, m, mu, x[0], x[1]);    //y-Komponente des Gradienten
+    g[0]=gradfuncx(user->M, user->m, user->mu, x[0], x[1]);    //x-Komponente des Gradienten
+    g[1]=gradfuncy(user->M, user->m, user->mu, x[0], x[1]);    //y-Komponente des Gradienten
     
     //PetscPrintf(PETSC_COMM_WORLD,"x = %.16f\ty = %.16f\n", x[0],x[1]);
     //PetscPrintf(PETSC_COMM_WORLD,"x-Grad = %.16f\ty-Grad = %.16f\n", g[0], g[1]);
@@ -236,6 +292,8 @@ PetscErrorCode FormFunctionGradient(Tao tao, Vec X, PetscReal *f, Vec G, void *c
 
 PetscErrorCode FormHessian(Tao tao, Vec X, Mat H, Mat Hpre, void *ctx)
 {
+    AppCtx *user=(AppCtx*)ctx;
+
     //Vec DE, DI;
     //const PetscScalar *de, *di;
     //PetscInt zero=0,one=1;
@@ -260,10 +318,10 @@ PetscErrorCode FormHessian(Tao tao, Vec X, Mat H, Mat Hpre, void *ctx)
     //di[0]*d/dx^2 Nebenbedingung
     //di[1]*d/dy^2 Nebenbedingung
     
-    val[0]=hessfuncxx(M, m, mu, x[0], x[1]);//+2*di[0];        //H_11
-    val[1]=hessfuncxy(M, m, mu, x[0], x[1]);                //H_12
-    val[2]=hessfuncxy(M, m, mu, x[0], x[1]);                //H_21
-    val[3]=hessfuncyy(M, m, mu, x[0], x[1]);//+2*di[0];        //H_22
+    val[0]=hessfuncxx(user->M, user->m, user->mu, x[0], x[1]);//+2*di[0];        //H_11
+    val[1]=hessfuncxy(user->M, user->m, user->mu, x[0], x[1]);                //H_12
+    val[2]=hessfuncxy(user->M, user->m, user->mu, x[0], x[1]);                //H_21
+    val[3]=hessfuncyy(user->M, user->m, user->mu, x[0], x[1]);//+2*di[0];        //H_22
     
     //PetscPrintf(PETSC_COMM_WORLD,"H = %.16f\t%.16f\n    %.16f\t%.16f\n", val[0], val[1], val[2], val[3]);
     
@@ -288,6 +346,8 @@ PetscErrorCode FormHessian(Tao tao, Vec X, Mat H, Mat Hpre, void *ctx)
 
 PetscErrorCode FormInequalityConstraints(Tao tao, Vec X, Vec CI, void *ctx)
 {
+    AppCtx *user=(AppCtx*)ctx;
+
     const PetscScalar *x;
     PetscScalar *c;
     PetscErrorCode ierr;
@@ -296,7 +356,7 @@ PetscErrorCode FormInequalityConstraints(Tao tao, Vec X, Vec CI, void *ctx)
     ierr = VecGetArrayRead(X,&x);CHKERRQ(ierr);
     ierr = VecGetArray(CI,&c);CHKERRQ(ierr);
     
-    c[0] = -(x[0]-(PetscScalar)x_0)*(x[0]-(PetscScalar)x_0)-(x[1]-(PetscScalar)y_0)*(x[1]-(PetscScalar)y_0)+r*r; //>=0
+    c[0] = -(x[0]-(PetscScalar)*user->x_0)*(x[0]-(PetscScalar)*user->x_0)-(x[1]-(PetscScalar)*user->y_0)*(x[1]-(PetscScalar)*user->y_0)+user->r*user->r; //>=0
     
     //PetscPrintf(PETSC_COMM_WORLD,"c = %.16f\tx = %.16f\ty = %.16f\n\n", c[0], x[0], x[1]);
     
@@ -334,8 +394,8 @@ PetscErrorCode FormInequalityJacobian(Tao tao, Vec X, Mat JI, Mat JIpre, void *c
     ierr = VecGetArrayRead(X,&x);CHKERRQ(ierr);
     rows[0] = 0;            //rows[1] = 1;
     cols[0] = 0;            cols[1] = 1;
-    vals[0] = -2*(x[0]-x_0);
-    vals[1] = -2*(x[1]-y_0);     //erste ableitungen der Nebenbedingungen
+    vals[0] = -2*(x[0]-*user->x_0);
+    vals[1] = -2*(x[1]-*user->y_0);     //erste ableitungen der Nebenbedingungen
     
     //PetscPrintf(PETSC_COMM_WORLD,"val[0] = %.16f\tval[1] = %.16f\tx = %.16f\ty = %.16f\t ni = %d n = %d\n\n", vals[0], vals[1], x[0], x[1], user->ni, user->n);
     //vals[2] = -2*x[0];  vals[3] = +1.0;
