@@ -64,3 +64,7 @@ ex6/ex6
 ex6/makefile
 talk_lagrange/talk_lagrange
 talk_gravity/talk_gravity
+
+*.aux
+*.log
+*.pdf

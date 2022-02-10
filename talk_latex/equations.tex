@@ -1,0 +1,161 @@
+\documentclass{article}
+\usepackage{mathtools}
+\usepackage{physics}
+
+\begin{document}
+
+\makeatletter
+\def\vec#1{\vb{#1}}
+\def\floor#1{\lfloor #1 \rfloor}
+
+
+\section{Lagrange}
+
+\def\r{\vec{r}}
+\def\dr{\vec{\dot{r}}}
+\def\r@t{\r\qty(t)}
+\def\dr@t{\dr\qty(t)}
+
+\def\action{S}
+\def\action@r{\action\qty[\r@t]}
+
+\def\lagrange{\mathcal{L}}
+\def\lagrange@t{\lagrange\qty(\r@t, \dr@t, t)}
+
+\def\potential{V}
+\def\potential@t{\potential\qty(\r@t, \dr@t, t)}
+
+\def\int@ab{\int^{\vec{b}}_{\vec{a}} \dd{\r}}
+\def\int@t{\int^T_0 \dd{t}}
+
+\begin{align*}
+    \action@r = 
+    \int@ab \lagrange = 
+    \int@t \lagrange@t =
+    \int@t \frac m2 \norm{\dr@t}^2 - \potential@t
+\end{align*}
+
+
+\section{Splines}
+
+\def\curve{\vec{C}}
+\def\curve@lambda{\curve\qty(\lambda)}
+\def\dcurve{\vec{\dot{C}}}
+\def\dcurve@lambda{\dcurve\qty(\lambda)}
+
+\def\segment{\curve^{(n)}}
+\def\segment@lambda{\segment\qty(\lambda)}
+\def\segment@nlambda{\segment\qty(\lambda - n)}
+\def\segment@floor{\curve^{(\floor\lambda)}}
+\def\segment@floor@lambda{\segment@floor\qty(\lambda - \floor\lambda)}
+\def\dsegment{\dcurve^{(n)}}
+\def\dsegment@lambda{\dsegment\qty(\lambda)}
+\def\dsegment@nlambda{\dsegment\qty(\lambda - n)}
+
+\def\basis_#1{f_#1}
+\def\basis@lambda_#1{\basis_#1\qty(\lambda)}
+\def\dbasis_#1{\dot{f}_#1}
+\def\dbasis@lambda_#1{\dbasis_#1\qty(\lambda)}
+\def\control{\vec{a}^{(n)}_j}
+
+\def\cgrad{\grad^{(n)}_k}
+\def\cdiv{\cgrad\vdot}
+
+\begin{align*}
+    \curve@lambda = 
+    \segment@floor@lambda
+\end{align*}
+\begin{align*}
+    \segment@lambda = 
+    \sum_j \basis@lambda_j \control
+\end{align*}
+\begin{align*}
+    \dsegment@lambda = 
+    \sum_j \dbasis@lambda_j \control
+\end{align*}
+\begin{align*}
+    \cdiv\curve@lambda = 
+    \cdiv\segment@nlambda = 
+    \basis@lambda_k
+\end{align*}
+\begin{align*}
+    \cdiv\dcurve@lambda = 
+    \cdiv\dsegment@nlambda = 
+    \dbasis@lambda_k
+\end{align*}
+
+
+\section{Connection}
+
+\def\curve@t{\curve\qty(\frac NT t)}
+\def\dcurve@t{\dcurve\qty(\frac NT t)}
+
+\def\r@alpha{\r\qty(T\alpha)}
+\def\curve@alpha{\curve\qty(N\alpha)}
+\def\dr@alpha{\dr\qty(T\alpha)}
+\def\dcurve@alpha{\dcurve\qty(N\alpha)}
+
+\def\int@lambda{\int^N_0 \dd{\lambda}}
+\def\action@curve{\action\qty[\curve@lambda]}
+\def\potential@lambda{\potential\qty(\curve@lambda, \frac NT \dcurve@lambda, \frac TN \lambda)}
+
+\begin{align*}
+    t \propto \lambda \Rightarrow t = \frac TN \lambda
+\end{align*}
+\begin{align*}
+    \r@t = 
+    \curve@t
+\end{align*}
+\begin{align*}
+    \dr@t = 
+    \frac NT \dcurve@t
+\end{align*}
+\begin{align*}
+    \r@alpha = \curve@alpha \quad\forall \alpha \in \qty[0, 1] \xRightarrow{\alpha = 0}
+    T = N \frac{\abs{\dcurve\qty(0)}}{\abs{\dr\qty(0)}}
+\end{align*}
+\begin{align*}
+    \action@r = 
+    \action@curve &= 
+    %\frac TN \int@lambda \frac m2 \norm{\frac NT \dcurve@lambda}^2 + \potential@lambda \\ &= 
+    \int@lambda \frac  m2 \frac NT \norm{\dcurve@lambda}^2 + \frac TN \potential@lambda
+\end{align*}
+\begin{align*}
+    \cgrad\action@curve =
+    \int@lambda m \frac NT \dcurve@lambda \qty(\cdiv\dcurve@lambda) +
+    \frac TN \pdv{\potential}{\r} \qty(\cdiv\curve@lambda) +
+    \pdv{\potential}{\dr} \qty(\cdiv\dcurve@lambda)
+\end{align*}
+
+
+\section{specifics}
+
+\def\vbasis{\vec{f}}
+
+\begin{align*}
+    \vbasis = 
+    \begin{pmatrix}
+        1 - \lambda \\
+        \lambda
+    \end{pmatrix}
+\end{align*}
+
+\begin{align*}
+    \vbasis = 
+    \begin{pmatrix}
+        \qty(1 - \lambda)^3 \\
+        3 \qty(1 - \lambda)^2 \lambda \\
+        3 \qty(1 - \lambda) \lambda^2 \\
+        \lambda^3
+    \end{pmatrix}
+    \xrightarrow[\qq{Speicher-Reihenfolge}]{\qq{stetig differenzierbar}}
+    \begin{pmatrix}
+        \qty(1 - \lambda)^3 \\
+        3 \qty(1 - \lambda)^2 \lambda \\
+        \lambda^3 + 3 \qty(1 - \lambda) \lambda^2 \\
+        6 \qty(1 - \lambda) \lambda^2
+    \end{pmatrix}
+\end{align*}
+
+
+\end{document}
