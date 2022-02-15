@@ -417,7 +417,16 @@ int main(int argv, char** argc)
 
         E(PetscPrintf(PETSC_COMM_WORLD, tp::clear(1, ctx.HEIGHT + 1).append(tp::move(0, ctx.HEIGHT + 1)).c_str()))
         {
-            harminv_complex signal[steps];
+            PetscReal warmup = 2.0;
+            
+            E(PetscOptionsGetReal(NULL, NULL, "-spectrum_warmup", &warmup, NULL))
+            if (warmup > maxTime * 0.9)
+                throw "warmup is too large";
+
+            PetscInt warmupSteps = (PetscInt)(steps * (maxTime - warmup) / maxTime);
+            PetscInt restSteps = steps - warmupSteps;
+
+            harminv_complex signal[restSteps];
             PetscBool peak = PETSC_FALSE;
             PetscScalar value;
             PetscReal real;
@@ -427,7 +436,7 @@ int main(int argv, char** argc)
 
             PetscReal uMin = PETSC_INFINITY, uMax = PETSC_NINFINITY;
             PetscReal vMin = PETSC_INFINITY, vMax = PETSC_NINFINITY;
-            for (int i = 0; i < steps; ++i)
+            for (int i = warmupSteps; i < steps; ++i)
             {
                 value = ctx.buffer[i].V;
                 real = PetscRealPart(value);
@@ -456,9 +465,9 @@ int main(int argv, char** argc)
                 if (peak && real < 0.2)
                     peak = PETSC_FALSE;
 
-                signal[i] = value;
+                signal[i - warmupSteps] = value;
             }
-
+            // FIXME: buffer returns all zeros?
             E(PetscPrintf(PETSC_COMM_WORLD, "U in [%5E, %5E]; V in [%5E, %5E]\n", uMin, uMax, vMin, vMax))
 
             if (peaks > 0)
@@ -467,11 +476,11 @@ int main(int argv, char** argc)
                 E(PetscPrintf(PETSC_COMM_WORLD, "frequency guess: %5E\n", 1 / period))
             }
 
-            PetscInt nf = (maxFrequency - minFrequency) * steps * 1.1;
+            PetscInt nf = (maxFrequency - minFrequency) * restSteps * 1.1;
             if (nf > 300)
                 nf = 300;
 
-            harminv_data data = harminv_data_create(steps, signal, minFrequency, maxFrequency, nf);
+            harminv_data data = harminv_data_create(restSteps, signal, minFrequency, maxFrequency, nf);
             harminv_solve(data);
 
             PetscInt freqs = harminv_get_num_freqs(data);
@@ -561,6 +570,7 @@ int main(int argv, char** argc)
                     PetscReal maxD = ds.max();
                     fs /= maxF;
                     ds /= maxD;
+                    ds *= fs;
                     
                     std::stringstream label;
                     label.setf(label.scientific, label.floatfield);
@@ -569,7 +579,7 @@ int main(int argv, char** argc)
                     plot.drawCurveWithPoints(xs, fs).label(label.str());
                     label.str("");
 
-                    label << "Decay (Normalized, max = " << maxD << ')';
+                    label << "Relative Decay (Normalized, max = " << maxD << ')';
                     plot.drawCurveWithPoints(xs, ds).label(label.str());
 
                     plot.show();
@@ -581,7 +591,10 @@ int main(int argv, char** argc)
     {
         DM dm;
 
-        E(DMDACreate1d(PETSC_COMM_WORLD, DM_BOUNDARY_GHOSTED, 100, 2, 1, NULL, &dm))
+        PetscInt gridSize = 100;
+        E(PetscOptionsGetInt(NULL, NULL, "-gridpoints", &gridSize, NULL))
+
+        E(DMDACreate1d(PETSC_COMM_WORLD, DM_BOUNDARY_GHOSTED, gridSize, 2, 1, NULL, &dm))
         E(DMSetFromOptions(dm))
         E(DMSetUp(dm))
         E(DMDASetUniformCoordinates(dm, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0))

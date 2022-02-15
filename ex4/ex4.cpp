@@ -169,7 +169,6 @@ struct LagrangeLerpContext : public TAOContext
     }
 };
 
-// FIXME: line serach failure (gradient wrong?)
 struct LagrangeLerpGravityContext : public LagrangeLerpContext
 {
     PetscReal gravity = 9.81;
